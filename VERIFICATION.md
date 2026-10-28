@@ -5,12 +5,13 @@
 - `npm test`: 11/11 tests (Node 24.22.1).
 - `node --check src/app.js`, `src/renderer.js`, `src/inspect.js`.
 - Parser tests cover single and dual video tracks, native extension detection, codec/dimensions, ftyp, skipping media data, truncated/invalid boxes, absent metadata, extended and zero-sized boxes, oversized metadata, malformed sample entries and safe time formatting.
+- Real original MAX sample inspected successfully using bounded file reads: brand `mp41`, two `hvc1` video tracks at 4096 × 1344, `mp4a` and `in32` audio, `tmcd`, `gpmd`, and `fdsc` ancillary tracks. Correctly classified as a native/multi-track candidate even with an `.mp4` filename suffix. The private sample remains outside the repository.
 - Source review: local Blob URLs only for video; no fetch/upload path or runtime CDN dependency. CSP disables network connections and limits media to Blob URLs.
 
 ## Not yet verified
 
 - Actual browser rendering, playback, seeking, fullscreen and mobile layouts.
-- Native camera sample parsing, HEVC decoding or GoPro projection reconstruction.
+- Native HEVC decoding or GoPro projection reconstruction (metadata inspection only was verified against a real camera sample).
 - GitHub Actions execution and live Pages deployment.
 - Headset WebXR (not implemented).
 

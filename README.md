@@ -50,4 +50,4 @@ References for the next investigation:
 
 ## Known limits
 
-No native MAX decode, headset VR, export, transcoding or device-motion control yet. No real GoPro sample was used for the initial implementation. Metadata inspection is deliberately small and conservative, not a general MP4 demuxer. Generic browser HEVC hints are not guarantees. Large or malformed metadata is rejected rather than loaded without bounds. The viewer requires WebGL; on context loss it asks for a reload. Verify target browser decoding and graphics limits before relying on a clip.
+No native MAX decode, headset VR, export, transcoding or device-motion control yet. The metadata inspector was verified against one real original MAX sample (two `hvc1` video tracks at 4096 × 1344). This validates inspection only, not native decoding or projection. Metadata inspection is deliberately small and conservative, not a general MP4 demuxer. Generic browser HEVC hints are not guarantees. Large or malformed metadata is rejected rather than loaded without bounds. The viewer requires WebGL; on context loss it asks for a reload. Verify target browser decoding and graphics limits before relying on a clip.
