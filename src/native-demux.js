@@ -1,6 +1,7 @@
 // Original, bounded ISO-BMFF sample demuxer. Metadata inspection skips video payload.
 import {readMovie, children, descend} from './inspect.js';
 import {createChunkedInput} from './chunked-input.js';
+import {demuxAudioTracks} from './audio-demux.js';
 const MAX_SAMPLES=1_000_000, MAX_SAMPLE_BYTES=32*1024*1024;
 export const READ_AHEAD_BYTES=4*1024*1024;
 // File-backed Blob reads can incur a task/IPC round trip per call. Amortize that
@@ -98,5 +99,6 @@ export async function demuxNative(file){
  }
  if(tracks.length!==2)throw new Error('Expected exactly two native MAX video tracks.');
  if(tracks.some(t=>t.config.codedWidth!==4096||t.config.codedHeight!==1344))throw new Error('This experimental MAX layout currently supports 4096 × 1344 tracks only.');
- return {tracks,duration:Math.min(...tracks.map(t=>t.duration)),...createMovieInput(file,tracks)};
+ const audio=demuxAudioTracks(v,file.size);audio.tracks.forEach((track,i)=>track.inputIndex=tracks.length+i);
+ return {tracks,audioTracks:audio.tracks,audioIssues:audio.issues,duration:Math.min(...tracks.map(t=>t.duration)),...createMovieInput(file,[...tracks,...audio.tracks])};
 }

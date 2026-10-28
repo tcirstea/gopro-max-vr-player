@@ -193,3 +193,16 @@ test('read configuration and concurrent-consumer misuse fail without corrupting 
   await tick();file.finish();assert.deepEqual(await first,bytes(0,4));bounded(input);
  }finally{input.close();file.finish();await tick();}
 });
+
+test('declared audio consumers share bounds and cannot deadlock on distant crossing packets',{timeout:3000},async()=>{
+ const file=source(4096),tracks=Array.from({length:4},(_,track)=>({samples:Array.from({length:12},(_,i)=>({offset:track*768+i*32+13,size:8}))}));
+ const input=createChunkedInput(file,{chunkBytes:16,tracks});
+ try{
+  for(let i=0;i<12;i++){
+   const data=await Promise.all([0,1,2].map(track=>input.read(tracks[track].samples[i],track,i)));
+   data.forEach((value,track)=>assert.deepEqual(value,bytes(tracks[track].samples[i].offset,8)));bounded(input);
+  }
+  // A formerly unused alternate audio track can replace old-current entries.
+  assert.deepEqual(await input.read(tracks[3].samples[0],3,0),bytes(tracks[3].samples[0].offset,8));bounded(input);
+ }finally{input.close();}
+});

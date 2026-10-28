@@ -9,7 +9,9 @@ export function createChunkedInput(file,{chunkBytes=LARGE_FILE_CHUNK_BYTES,maxCh
  if(!Number.isSafeInteger(file.size)||file.size<1||!Number.isSafeInteger(chunkBytes)||chunkBytes<1||!Number.isInteger(maxChunks)||maxChunks<4||!Number.isInteger(maxConcurrentReads)||maxConcurrentReads<1||maxConcurrentReads>2)throw new Error('Invalid local input buffer limits.');
  const budget=chunkBytes*maxChunks;
  if(!Number.isSafeInteger(budget))throw new Error('Invalid local input buffer budget.');
- const entries=new Map(),requests=new Map(),current=[[],[]],ahead=[[],[]],hints=[null,null];
+ const consumerCount=Math.max(2,tracks.length);
+ if(consumerCount>8)throw new Error('Too many local media consumers.');
+ const entries=new Map(),requests=new Map(),current=Array.from({length:consumerCount},()=>[]),ahead=Array.from({length:consumerCount},()=>[]),hints=Array(consumerCount).fill(null);
  let generation=0,closed=false,prepared=false,scheduled=false,clock=0,reservedBytes=0,activeReads=0;
  const stats={readOperations:0,bytesRead:0,cacheHits:0,readMilliseconds:0,maxReadMilliseconds:0,prefetchReadOperations:0,prefetchHits:0,canceledReads:0,discardedReads:0,maxReservedBytes:0,maxActiveReads:0,sampleBytesCopied:0};
  const keysFor=sample=>{
@@ -46,7 +48,12 @@ export function createChunkedInput(file,{chunkBytes=LARGE_FILE_CHUNK_BYTES,maxCh
   const size=entry.end-entry.start;
   while(reservedBytes+size>budget){
    // Speculation cannot evict either track's current or desired next chunk.
-   const victim=[...entries.values()].filter(other=>other.state==='ready'&&!other.refs&&!protectedKey(other.key)&&(demand||!wanted(other.key))).sort((a,b)=>a.lastUse-b.lastUse)[0];
+   const ready=[...entries.values()].filter(other=>other.state==='ready'&&!other.refs);
+   let victim=ready.filter(other=>!protectedKey(other.key)&&(demand||!wanted(other.key))).sort((a,b)=>a.lastUse-b.lastUse)[0];
+   // Audio can occupy a third distant region. Previously-used current keys
+   // are only a preference: active requests retain refs and are never evicted.
+   // Demands may replace inactive old-current chunks to avoid a full-cache deadlock.
+   if(!victim&&demand)victim=ready.sort((a,b)=>a.lastUse-b.lastUse)[0];
    if(!victim)return false;
    entries.delete(victim.key);reservedBytes-=victim.end-victim.start;victim.data=null;
   }
@@ -74,7 +81,7 @@ export function createChunkedInput(file,{chunkBytes=LARGE_FILE_CHUNK_BYTES,maxCh
  function drain(){
   scheduled=false;if(closed)return;
   finishRequests();
-  // Bound queued work as well as allocations. Only two consumers and their
+  // Bound queued work as well as allocations. Only declared consumers and their
   // next sample-table transitions can request background work.
   for(const [key,entry] of entries){if(!entry.refs&&!wanted(key)&&(entry.state==='queued'||entry.state==='error'))entries.delete(key);}
   for(const keys of ahead)for(const key of keys)entryFor(key);
@@ -109,7 +116,7 @@ export function createChunkedInput(file,{chunkBytes=LARGE_FILE_CHUNK_BYTES,maxCh
    if(closed)return Promise.reject(new Error('Local video input is closed.'));
    const {offset,size}=sample;
    if(!Number.isSafeInteger(offset)||!Number.isSafeInteger(size)||offset<0||size<=0||size>MAX_SAMPLE_BYTES||!Number.isSafeInteger(offset+size)||offset+size>file.size)return Promise.reject(new Error('Sample points outside the local file or exceeds the safety limit.'));
-   if(trackIndex!==0&&trackIndex!==1)return Promise.reject(new Error('Invalid video track index.'));
+   if(!Number.isInteger(trackIndex)||trackIndex<0||trackIndex>=consumerCount)return Promise.reject(new Error('Invalid video track index.'));
    if(requests.has(trackIndex))return Promise.reject(new Error('A video track already has a pending sample read.'));
    const keys=keysFor(sample);
    if(keys.length>2)return Promise.reject(new Error('Sample exceeds the chunk buffer safety limit.'));

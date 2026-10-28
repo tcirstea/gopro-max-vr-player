@@ -2,14 +2,14 @@
 
 ## Passed
 
-- `npm test`: **57/57 tests**, Node 24.22.1.
-- `node --check` for every `src/*.js` module.
+- `npm test`: **103/103 tests**, Node 24.22.1 (final combined audio/stabilization review).
+- `node --check` for every `src/*.js` module; `git diff --check`.
 - Metadata/parser tests: single/dual tracks, native detection, codecs/dimensions, media-payload skipping, malformed/truncated/extended/zero-sized boxes, metadata limits and safe time formatting.
 - Native tests: sample offsets/timestamps, codec configuration strings, invalid offsets/dimensions/reordered timestamps, **mocked** paired decode, duration/seek behavior, frame cleanup, unsupported-codec and partial-configuration failure, separate decode-request/output backpressure and 24-sample hard outstanding cap.
 - Projection tests: known templates, face/track rotations, overlap coordinates/weights, sphere-wide bounds, invalid rays and asymmetric projection-matrix inversion.
 - Source review found no runtime fetch/upload path or CDN dependency. CSP disables network connections and limits browser video media to Blob URLs.
 
-No camera recordings or derived previews are included in the repository or deployed site.
+No camera recordings, derived previews, extracted telemetry, or private per-recording measurements are included in the publication set.
 
 ## Not yet verified
 
@@ -22,7 +22,7 @@ Browser QA was attempted. Workspace Chromium failed before loading the page beca
 
 ## Remaining implementation limits
 
-Native audio, ambisonics, gyro stabilization, horizon leveling and optical-flow seam correction are absent. Duplicated-overlap blending is implemented. Native demux currently accepts 4096×1344 paired HEVC tracks and rejects reordered timestamps and nonzero edit offsets; MAX2 is not validated. The 2272×736 renderer template is not yet enabled through native demux.
+Native AAC stereo, metadata-gated ambisonic headphone rendering, and GPMF relative-orientation stabilization are implemented experimentally. Absolute horizon leveling and optical-flow seam correction remain absent. See AUDIO.md and STABILIZATION.md for evidence and limits. Duplicated-overlap blending is implemented. Native demux currently accepts 4096×1344 paired HEVC tracks and rejects reordered timestamps and nonzero edit offsets; MAX2 is not validated. The 2272×736 renderer template is not yet enabled through native demux.
 
 ## Browser acceptance checks
 
@@ -30,7 +30,7 @@ Native audio, ambisonics, gyro stabilization, horizon leveling and optical-flow 
 2. Open suitable original MAX test media on a HEVC-capable browser. Verify both decoders, orientation, overlap seams and motion against a trusted export.
 3. Play/pause, seek while paused/playing, replay after end, seek rapidly, and switch between native/equirectangular/demo repeatedly. Ensure old events and frames do not affect the newer source.
 4. Test corrupt/unsupported files, unavailable WebCodecs/HEVC, partial decoder failure, GPU limits and WebGL context loss.
-5. Test equirectangular playback and audio/mute independently; native playback should remain clearly silent.
+5. Test equirectangular playback and audio/mute independently; native playback starts muted; verify stereo, spatial headphones, pause/seek/mode switching and A/V alignment independently.
 6. Enter/exit fullscreen and immersive WebXR, including interruption and reentry; validate both eyes and fixed-position panorama behavior on a physical headset.
 7. Verify the deployed commit and live repository-subpath URL separately. This local verification record does not certify a particular GitHub Actions run or deployment.
 
@@ -68,3 +68,14 @@ Native audio, ambisonics, gyro stabilization, horizon leveling and optical-flow 
 - `npm test`: **57/57 passed**; `node --check` passed for all source modules. These tests establish reader correctness/lifecycle, not actual browser HEVC smoothness.
 - `node scripts/benchmark-input.mjs`: deterministic synthetic 1200 MiB interleaved recording with a serial 16 MiB/s disk, 20 ms per physical read, 128 KiB samples and 30 paired frames/second. Physical reads: **600 → 19**. Read volume: **2399.88 → 1200.00 MiB**. Initial preparation: **0.54 → 4.02 s**. Playback storage waits: **299 → 0**, with total modeled read waiting **161.992 → 4.020 s**. Peak reserved compressed input: **256 MiB**, maximum simultaneous reads: **2**. This is a model of read scheduling and duplicated input work, not a measured device throughput, decoder FPS, or promise of stutter-free playback.
 - No original large recording or device diagnostics were available for this change. Real HEVC/GPU performance, actual storage latency, and target-device memory pressure remain user-device acceptance checks.
+
+
+## Combined audio, stabilization and immersive scheduling — 2026-10-28
+
+- AAC-LC stereo/mono and metadata-gated first-order spatial PCM are parsed independently of video support. Tests cover packet tables, format rejection, edit trimming, channel conversion, ambisonic axis mapping and the discrete-channel headphone graph.
+- Native audio shares the bounded video input cache. Mocked A/V tests cover the audio-master clock, video starvation, muted playback, seeks, stale decoder output, mode switching, short audio, duration clipping, scheduling bounds, failure and closure.
+- Fixed an integration rewind when AudioContext suspension occurs between render ticks: buffering now captures the actual audio-clock instant. A regression reproduces and verifies this case.
+- Native playback now advances from the renderer's single active desktop/XR loop before textures are drawn. This avoids depending on window animation frames during immersion, which the [WebXR specification](https://immersive-web.github.io/webxr/#animation-frames) does not guarantee. Mocked tests cover desktop-to-XR transition, consecutive immersive ticks without window ticks, suppression of duplicate window advancement, return to desktop, source replacement and closure.
+- GPMF tests cover bounded parsing, scaling, frame ordinals rather than padded packet timing, noncommuting CORI/IORI composition, stable first-frame reference, lazy caching, cancellation and malformed/absent metadata. Renderer tests check matching view/stabilization matrices for image sampling and the audio listener.
+- Final aggregate: **103/103 tests pass**, all source syntax checks pass, and `git diff --check` passes. These are synthetic/mocked software checks. Actual HEVC/AAC WebCodecs execution, GPU pixels, sustained playback, acoustic A/V alignment, headphone localization and physical-headset behavior remain unverified on a supported target browser/device. The historical browser-launch/network blockers above are not passing browser checks.
+- Private sample-derived measurements are deliberately excluded from published documentation. Generic methodology and reproducible synthetic evidence are retained in this file, AUDIO.md and STABILIZATION.md.

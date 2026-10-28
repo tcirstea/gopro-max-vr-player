@@ -1,14 +1,16 @@
 import {maxLayout,MAX_GLSL} from './max-projection.js';
+import {IDENTITY_QUATERNION,quaternionMatrix,multiplyMatrix3,viewRotationMatrix} from './quaternion.js';
 export function createRenderer(canvas) {
   const gl=canvas.getContext('webgl',{alpha:false,antialias:false,xrCompatible:true});
   if(!gl)throw new Error('WebGL is unavailable. Enable hardware acceleration.');
   const vertex='attribute vec2 p; varying vec2 uv; void main(){uv=p;gl_Position=vec4(p,0.,1.);}';
-  const fragment=`precision highp float; varying vec2 uv; uniform sampler2D panorama; uniform float aspect,yaw,pitch,fov,mode,xr;uniform mat4 invProjection,viewRotation;
+  const fragment=`precision highp float; varying vec2 uv; uniform sampler2D panorama; uniform float aspect,yaw,pitch,fov,mode,xr;uniform mat4 invProjection,viewRotation;uniform mat3 stabilization;
   ${MAX_GLSL}
   void main(){vec3 d;
   if(xr>.5){d=normalize(mat3(viewRotation)*(invProjection*vec4(uv,-1.,1.)).xyz);}
   else {d=normalize(vec3(uv.x*aspect*tan(fov/2.),uv.y*tan(fov/2.),-1.));d=vec3(d.x,d.y*cos(pitch)-d.z*sin(pitch),d.y*sin(pitch)+d.z*cos(pitch));}
   d=vec3(d.x*cos(yaw)+d.z*sin(yaw),d.y,-d.x*sin(yaw)+d.z*cos(yaw));
+  d=stabilization*d;
   vec2 st=vec2(atan(d.x,-d.z)/6.2831853+.5,asin(clamp(d.y,-1.,1.))/3.14159265+.5);
   gl_FragColor=mode>.5?sampleMax(d):texture2D(panorama,st);}`;
   const compile=(type,source)=>{const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;};
@@ -20,11 +22,13 @@ export function createRenderer(canvas) {
   const textures=[0,1].map(i=>{const t=gl.createTexture();gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,t);for(const pname of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,pname,gl.LINEAR);for(const pname of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,pname,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0,255]));return t;});
   gl.uniform1i(loc('panorama'),0);gl.uniform1i(loc('trackOne'),1);
   let source=null,dirty=true,yaw=0,pitch=0,fov=Math.PI/2,lastPointer=null,mode=0,session=null,referenceSpace=null;
+  let stabilization=quaternionMatrix(IDENTITY_QUATERNION),orientationCallback=null,frameCallback=null,lastView=quaternionMatrix(IDENTITY_QUATERNION);
+  function reportView(pose=null){lastView=multiplyMatrix3(stabilization,viewRotationMatrix(yaw,pitch,pose));orientationCallback?.(lastView.slice());}
   function upload(s,i){gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,textures[i]);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,s);}
   function uploadSource(){if(source&&(dirty||(source.tagName==='VIDEO'&&!source.paused))&&(source.tagName!=='VIDEO'||source.readyState>=2)){try{upload(source,0);}catch(error){source=null;canvas.dispatchEvent(new CustomEvent('rendererror',{detail:error.message}));}}dirty=false;}
-  function render(w,h,xr=false){for(const [n,v]of Object.entries({aspect:w/Math.max(1,h),yaw,pitch,fov,mode,xr:xr?1:0}))gl.uniform1f(loc(n),v);gl.drawArrays(gl.TRIANGLES,0,6);}
-  function draw(){requestAnimationFrame(draw);if(gl.isContextLost()||session)return;uploadSource();const scale=Math.min(globalThis.devicePixelRatio||1,2),w=Math.max(1,Math.round(canvas.clientWidth*scale)),h=Math.max(1,Math.round(canvas.clientHeight*scale));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,w,h);render(w,h);}
-  function xrDraw(time,frame){if(!session)return;session.requestAnimationFrame(xrDraw);const pose=frame.getViewerPose(referenceSpace);if(!pose)return;uploadSource();const layer=session.renderState.baseLayer;gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);gl.clear(gl.COLOR_BUFFER_BIT);for(const view of pose.views){const v=layer.getViewport(view);gl.viewport(v.x,v.y,v.width,v.height);gl.uniformMatrix4fv(loc('invProjection'),false,invert4(view.projectionMatrix));gl.uniformMatrix4fv(loc('viewRotation'),false,view.transform.matrix);render(v.width,v.height,true);}}
+  function render(w,h,xr=false){for(const [n,v]of Object.entries({aspect:w/Math.max(1,h),yaw,pitch,fov,mode,xr:xr?1:0}))gl.uniform1f(loc(n),v);gl.uniformMatrix3fv(loc('stabilization'),false,stabilization);gl.drawArrays(gl.TRIANGLES,0,6);}
+  function draw(time){requestAnimationFrame(draw);if(gl.isContextLost()||session)return;frameCallback?.(time);uploadSource();reportView();const scale=Math.min(globalThis.devicePixelRatio||1,2),w=Math.max(1,Math.round(canvas.clientWidth*scale)),h=Math.max(1,Math.round(canvas.clientHeight*scale));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,w,h);render(w,h);}
+  function xrDraw(time,frame){if(!session)return;session.requestAnimationFrame(xrDraw);const pose=frame.getViewerPose(referenceSpace);if(!pose)return;frameCallback?.(time);uploadSource();reportView(pose.transform.matrix);const layer=session.renderState.baseLayer;gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);gl.clear(gl.COLOR_BUFFER_BIT);for(const view of pose.views){const v=layer.getViewport(view);gl.viewport(v.x,v.y,v.width,v.height);gl.uniformMatrix4fv(loc('invProjection'),false,invert4(view.projectionMatrix));gl.uniformMatrix4fv(loc('viewRotation'),false,view.transform.matrix);render(v.width,v.height,true);}}
   canvas.addEventListener('pointerdown',e=>{canvas.focus();canvas.setPointerCapture(e.pointerId);lastPointer=[e.clientX,e.clientY];});
   canvas.addEventListener('pointermove',e=>{if(!lastPointer)return;yaw+=(e.clientX-lastPointer[0])*.004;pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.clientY-lastPointer[1])*.004));lastPointer=[e.clientX,e.clientY];});
   for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,()=>lastPointer=null);
@@ -32,9 +36,16 @@ export function createRenderer(canvas) {
   canvas.addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','+','=','-'].includes(e.key))return;e.preventDefault();yaw+=e.key==='ArrowLeft'?.1:e.key==='ArrowRight'?-.1:0;pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.key==='ArrowUp'?.1:e.key==='ArrowDown'?-.1:0)));fov=Math.max(.4,Math.min(2.1,fov+(e.key==='-'?.1:['+','='].includes(e.key)?-.1:0)));});
   canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();canvas.dispatchEvent(new CustomEvent('rendererror',{detail:'Graphics context lost. Reload the player to restore playback.'}));});
   requestAnimationFrame(draw);
-  const api={setSource(next){source=next;mode=0;dirty=true;},
+  const api={setSource(next){source=next;mode=0;dirty=true;stabilization=quaternionMatrix(IDENTITY_QUATERNION);},
     // Synchronous GPU upload. Caller retains ownership and may close frames immediately.
-    setMaxSources(first,second,options={}){const width=options.width??first.displayWidth??first.videoWidth??first.width;const height=options.height??first.displayHeight??first.videoHeight??first.height;const l=maxLayout(width,height);const secondWidth=second.displayWidth??second.videoWidth??second.width;const secondHeight=second.displayHeight??second.videoHeight??second.height;if(!options.width&&(secondWidth!==width||secondHeight!==height))throw new Error('MAX track frames must have matching dimensions.');if(width>gl.getParameter(gl.MAX_TEXTURE_SIZE))throw new Error('This GPU cannot hold the MAX video textures.');if(gl.isContextLost())throw new Error('Graphics context is lost.');upload(first,0);upload(second,1);gl.uniform4f(loc('maxSize'),l.width,l.height,l.side,l.center);gl.uniform1f(loc('maxBlend'),l.blend);source=null;mode=1;dirty=false;},
+    setMaxSources(first,second,options={}){const width=options.width??first.displayWidth??first.videoWidth??first.width;const height=options.height??first.displayHeight??first.videoHeight??first.height;const l=maxLayout(width,height);const secondWidth=second.displayWidth??second.videoWidth??second.width;const secondHeight=second.displayHeight??second.videoHeight??second.height;if(!options.width&&(secondWidth!==width||secondHeight!==height))throw new Error('MAX track frames must have matching dimensions.');if(width>gl.getParameter(gl.MAX_TEXTURE_SIZE))throw new Error('This GPU cannot hold the MAX video textures.');if(gl.isContextLost())throw new Error('Graphics context is lost.');upload(first,0);upload(second,1);gl.uniform4f(loc('maxSize'),l.width,l.height,l.side,l.center);gl.uniform1f(loc('maxBlend'),l.blend);stabilization=quaternionMatrix(options.stabilization||IDENTITY_QUATERNION);source=null;mode=1;dirty=false;},
+    // A single active render loop drives native media even when immersive XR
+    // suppresses window animation frames; advance before texture/view upload.
+    onBeforeRender(callback){frameCallback=callback;return ()=>{if(frameCallback===callback)frameCallback=null;};},
+    // Camera-to-raw-source sampling rotation, column-major. Includes XR and
+    // gyro correction so an ambisonic listener follows the displayed view.
+    onViewOrientation(callback){orientationCallback=callback;return ()=>{if(orientationCallback===callback)orientationCallback=null;};},
+    getViewOrientation(){return lastView.slice();},
     refresh(){dirty=true;},reset(){yaw=0;pitch=0;fov=Math.PI/2;},
     async enterVR(){if(session){await session.end();return;}if(!navigator.xr)throw new Error('Immersive WebXR is unavailable. Use a supported headset browser over HTTPS or localhost.');const next=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor']});try{await gl.makeXRCompatible();const ref=await next.requestReferenceSpace('local');next.updateRenderState({baseLayer:new XRWebGLLayer(next,gl)});referenceSpace=ref;session=next;next.addEventListener('end',()=>{session=null;canvas.dispatchEvent(new Event('vrend'));});next.requestAnimationFrame(xrDraw);}catch(e){await next.end();throw e;}}
   };

@@ -9,6 +9,8 @@ A static, local-first player targeting original **GoPro MAX** `.360` files witho
 - Local file selection; **no video uploads**, backend, runtime CDN or npm dependencies.
 - Bounded MP4 inspection and a dedicated sample-table demuxer that prepares files up to 64 MiB once in shared local memory; larger recordings use shared **64 MiB chunks with asynchronous lookahead**, bounded to 256 MiB of compressed cache plus in-flight reads.
 - Two WebCodecs HEVC decoders, actual-codec capability checks, timestamp pairing, bounded queues, seeking, play/pause and frame cleanup.
+- Synchronized native AAC stereo and explicit-SA3D ambisonic headphone audio, with mute, mode switching and bounded local decoding; experimental, not physically audio/headset-tested.
+- Frame-aligned GPMF relative-orientation stabilization; not absolute horizon leveling. See [STABILIZATION.md](STABILIZATION.md).
 - Original MAX EAC projection with second-track rotation and duplicated-overlap blending.
 - Experimental immersive WebXR with per-eye views and orientation-only panorama tracking; **not physically headset-tested**.
 - Browser-decodable equirectangular MP4 fallback, drag/arrow-key navigation, zoom, reset, seek and fullscreen.
@@ -26,14 +28,14 @@ npm start
 
 Open an original MAX `.360` file to attempt native decoding locally. The current native demux path accepts **two 4096×1344 HEVC video tracks**. WebCodecs requires HTTPS or localhost, and HEVC availability depends on browser, OS and hardware. Passing a capability check does not guarantee two simultaneous decoders can sustain playback. Unsupported devices get an error; there is no transcoding or upload fallback.
 
-For an exported, already-stitched video, select **View as equirectangular video**. Choose actual equirectangular material (normally 2:1); dimensions alone do not establish projection. Audio/mute works through the browser video element for this path. **Native MAX playback is currently silent.**
+For an exported, already-stitched video, select **View as equirectangular video**. Choose actual equirectangular material (normally 2:1); dimensions alone do not establish projection. Audio/mute works through the browser video element for this path. Native MAX audio starts muted: uncheck **Muted** to listen. When explicit supported spatial metadata is present, choose **Spatial headphones (experimental)** for head-relative sound. Stereo does not rotate with the view. See [AUDIO.md](AUDIO.md) for format support and verification limits.
 
 **Enter VR** is enabled only if the browser reports immersive WebXR support. Both eyes share the same monoscopic panorama; headset translation is intentionally ignored. A supporting headset/browser and secure context are required.
 
 ## Current limits
 
 - **Unverified end-to-end native playback:** real WebCodecs decode, GPU rendering, full-resolution performance, browser seeking and headset sessions still need testing on target devices.
-- Native audio, ambisonics, gyro stabilization, horizon leveling and optical-flow seam correction are not implemented. Basic duplicated-overlap blending is implemented, but visual seam quality is not production-validated.
+- Native stereo/spatial audio and GPMF relative-orientation stabilization are implemented experimentally. Actual A/V listening, headset localization and general orientation conventions still need device validation. Absolute horizon leveling and optical-flow seam correction are not implemented. Basic duplicated-overlap blending is implemented, but visual seam quality is not production-validated.
 - Native demux rejects reordered presentation timestamps, nonzero edit-list offsets, unsupported sample descriptions and dimensions. It is not a general-purpose MP4 demuxer. MAX2 compatibility is not claimed.
 - Renderer math also has a 2272×736 template, but the current native demux path does **not** accept that mode yet.
 - Metadata is capped at 16 MiB; sample counts and sample sizes are bounded. Long recordings may exceed conservative limits. No export or transcoding.
@@ -41,7 +43,7 @@ For an exported, already-stitched video, select **View as equirectangular video*
 
 ## Verification
 
-See [VERIFICATION.md](VERIFICATION.md) for exact checks and gaps. The current suite has **57 passing tests**, including parser limits, sample tables, mocked decoding lifecycle and EAC projection math. No camera recordings or derived previews are included in this repository.
+See [VERIFICATION.md](VERIFICATION.md) for exact checks and gaps. The current suite covers audio, stabilization, parsing, reading and mocked playback, including parser limits, sample tables, mocked decoding lifecycle and EAC projection math. No camera recordings or derived previews are included in this repository.
 
 ## GitHub Pages
 
@@ -55,7 +57,7 @@ Never commit camera originals; common video extensions are ignored. A private so
 2. Exercise rapid source switching, pause/resume, repeated seeks, end-of-file, decoder failure, context loss, GPU texture limits and long-file memory behavior.
 3. Validate real-time dual decoding at full resolution, mobile thermal behavior and browser/OS/device compatibility.
 4. Test actual headset WebXR sessions, per-eye views, recentering, session interruption and exit/reentry.
-5. Add synchronized native audio and telemetry-based stabilization; expand container/mode support only with verified fixtures.
+5. Validate synchronized native audio and telemetry-based stabilization on the target device; expand container/mode support only with verified fixtures.
 
 ## Format and attribution
 
@@ -75,7 +77,7 @@ The large-file reader reserves at most **256 MiB** across cached chunks **and re
 
 Startup deliberately waits for the first 64 MiB chunk. On slower storage that can take several seconds; the next chunk is read ahead rather than waiting for a playback miss. Prefetch cannot overcome storage slower than the sustained video bitrate, insufficient HEVC decode throughput, or a GPU bottleneck. Small-file preparation, decode/frame limits, projection, and zoom are unchanged. Everything stays in local memory: no upload or persistent browser copy.
 
-Diagnostics **v5** reports the strategy, shared physical read/prefetch/cache counters, sample-copy bytes, current/peak reserved compressed bytes, concurrent reads, canceled consumers and discarded reads, plus decoder-output latency and animation-frame gaps. Shared reads are counted only once. GPU upload timings do not measure asynchronous GPU draw completion.
+Diagnostics **v6** reports the strategy, shared physical read/prefetch/cache counters, sample-copy bytes, current/peak reserved compressed bytes, concurrent reads, canceled consumers and discarded reads, plus decoder-output latency and animation-frame gaps. Audio scheduling/clock counters and stabilization status are also included. Shared reads are counted only once. GPU upload timings do not measure asynchronous GPU draw completion.
 
 ### Reproducible input benchmark
 

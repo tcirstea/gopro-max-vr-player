@@ -127,7 +127,7 @@ test('large-file player cancels seek reads before decoding and bounds raw I/O ac
  const settle=()=>new Promise(resolve=>setImmediate(resolve));let player;
  try{
   const file=await largeFixture();player=await createNativePlayer(file,{onFrames(){assert.fail('No fake decoder output should be rendered');}});await settle();
-  assert.equal(player.getDiagnostics().version,5);assert.equal(player.getDiagnostics().inputState.strategy,'chunked-prefetch');
+  assert.equal(player.getDiagnostics().version,6);assert.equal(player.getDiagnostics().inputState.strategy,'chunked-prefetch');
   assert.equal(file.pending.length,1,'both tracks share the demand chunk');
   for(let i=0;i<20;i++){player.seek((i%4)*.2);await settle();}
   assert.equal(file.reads.length,2,'uncancelable old reads cap new allocations');
