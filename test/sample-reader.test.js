@@ -62,15 +62,17 @@ test('small-file preparation shares one local read and backing buffer across tra
  assert.equal(input.getInputState().preparing,false);input.close();assert.equal(input.getReadDiagnostics()[0].cachedBytes,0);
  await assert.rejects(input.read({offset:0,size:4}),/closed/);
 });
-test('preload ceiling is inclusive; larger files retain bounded per-track streaming',async()=>{
+test('preload ceiling is inclusive; larger files use shared 64 MiB chunk prefetch',async()=>{
  const calls=[];
  const atLimit=createMovieInput({size:SMALL_FILE_PRELOAD_BYTES,slice(){assert.fail('Constructing input must not read');}});
  assert.equal(atLimit.getInputState().strategy,'preload-small-file');atLimit.close();
  const input=createMovieInput({size:SMALL_FILE_PRELOAD_BYTES+1,slice(start,end){calls.push([start,end]);return new Blob([new Uint8Array(end-start)]);}});
- assert.equal(input.getInputState().strategy,'streamed-windows');
+ assert.equal(input.getInputState().strategy,'chunked-prefetch');
  await Promise.all([input.read({offset:0,size:1},0),input.read({offset:READ_AHEAD_BYTES*2,size:1},1)]);
- assert.deepEqual(calls,[[0,READ_AHEAD_BYTES],[READ_AHEAD_BYTES*2,READ_AHEAD_BYTES*3]]);
- assert.equal(input.getReadDiagnostics().reduce((n,s)=>n+s.cachedBytes,0),READ_AHEAD_BYTES*2);input.close();
+ assert.equal(calls.filter(([start])=>start===0).length,1,'both tracks share one 64 MiB chunk');
+ assert.ok(calls.every(([start,end])=>end-start<=SMALL_FILE_PRELOAD_BYTES));
+ assert.equal(input.getReadDiagnostics().length,1);
+ assert.ok(input.getReadDiagnostics()[0].reservedBytes<=4*SMALL_FILE_PRELOAD_BYTES);input.close();
 });
 test('truncated and rejected shared preparation fail both consumers without retry storms',async()=>{
  for(const fails of [false,true]){

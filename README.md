@@ -7,7 +7,7 @@ A static, local-first player targeting original **GoPro MAX** `.360` files witho
 ## Implemented
 
 - Local file selection; **no video uploads**, backend, runtime CDN or npm dependencies.
-- Bounded MP4 inspection and a dedicated sample-table demuxer that prepares files up to 64 MiB once in shared local memory; larger recordings stream with bounded 4 MiB read-ahead per track.
+- Bounded MP4 inspection and a dedicated sample-table demuxer that prepares files up to 64 MiB once in shared local memory; larger recordings use shared **64 MiB chunks with asynchronous lookahead**, bounded to 256 MiB of compressed cache plus in-flight reads.
 - Two WebCodecs HEVC decoders, actual-codec capability checks, timestamp pairing, bounded queues, seeking, play/pause and frame cleanup.
 - Original MAX EAC projection with second-track rotation and duplicated-overlap blending.
 - Experimental immersive WebXR with per-eye views and orientation-only panorama tracking; **not physically headset-tested**.
@@ -41,7 +41,7 @@ For an exported, already-stitched video, select **View as equirectangular video*
 
 ## Verification
 
-See [VERIFICATION.md](VERIFICATION.md) for exact checks and gaps. The current suite has **40 passing tests**, including parser limits, sample tables, mocked decoding lifecycle and EAC projection math. No camera recordings or derived previews are included in this repository.
+See [VERIFICATION.md](VERIFICATION.md) for exact checks and gaps. The current suite has **57 passing tests**, including parser limits, sample tables, mocked decoding lifecycle and EAC projection math. No camera recordings or derived previews are included in this repository.
 
 ## GitHub Pages
 
@@ -69,6 +69,18 @@ Original MAX `.360` files are not ordinary equirectangular videos. GoPro stitche
 
 Native playback now pauses its media clock while buffering paired frames, rather than skipping ahead during a decoder stall. If playback still buffers repeatedly, choose **Save playback diagnostics** after reproducing it. The downloaded JSON contains only technical counters, queue sizes, codec dimensions and timings; no filename, footage, audio, path or automatic upload. Share that report manually if troubleshooting is needed. Hardware performance remains device-dependent.
 
-For files larger than 64 MiB, the compressed-input reader batches local file access into at most 4 MiB cached windows per track (8 MiB retained caches total). This reduces per-frame file-read overhead without raising decoded-frame/GPU memory limits. Larger individual samples use exact uncached reads. Diagnostics v3 adds input read/cache counters, wall-clock read and decoder-output latency, and animation-frame gaps to help distinguish storage starvation from decoder or rendering delays. GPU upload timings do not measure asynchronous GPU draw completion. Real-device smoothness still needs confirmation.
+Files up to **64 MiB** prepare once in shared local memory before either decoder receives frames. Larger files use shared, aligned **64 MiB chunks**. Both tracks reuse the same physical reads, and their sample tables guide asynchronous lookahead while the current chunk is playing. Distant track layouts have room for two current chunks and two lookahead chunks.
 
-Files up to **64 MiB** now prepare once in shared local memory before either decoder receives frames. This trades an upfront preparation wait for avoiding repeated slow file reads during playback and seeking. The limit is compressed-file storage, not total browser/decoder/GPU memory. Larger recordings retain the streamed-window strategy and may still buffer if local file reads cannot keep up. Diagnostics v4 reports the strategy and shared read statistics without counting the same preparation twice. This is local memory only, not an upload or persistent browser copy.
+The large-file reader reserves at most **256 MiB** across cached chunks **and reads still in flight**, with at most two simultaneous local reads. Exact sample copies can add up to 32 MiB per active track; decoder, metadata, browser, and GPU allocations are separate. This is not a total browser-memory cap. No full 1200 MiB recording is loaded at once. Seeking cancels obsolete consumers and queued speculation; uncancelable Blob reads retain their reservations until they finish, and stale results are discarded. A new seek may briefly await such an active read slot. Ready chunks can be reused for nearby seeks.
+
+Startup deliberately waits for the first 64 MiB chunk. On slower storage that can take several seconds; the next chunk is read ahead rather than waiting for a playback miss. Prefetch cannot overcome storage slower than the sustained video bitrate, insufficient HEVC decode throughput, or a GPU bottleneck. Small-file preparation, decode/frame limits, projection, and zoom are unchanged. Everything stays in local memory: no upload or persistent browser copy.
+
+Diagnostics **v5** reports the strategy, shared physical read/prefetch/cache counters, sample-copy bytes, current/peak reserved compressed bytes, concurrent reads, canceled consumers and discarded reads, plus decoder-output latency and animation-frame gaps. Shared reads are counted only once. GPU upload timings do not measure asynchronous GPU draw completion.
+
+### Reproducible input benchmark
+
+```sh
+node scripts/benchmark-input.mjs
+```
+
+This is a deterministic **synthetic storage model**, not real HEVC playback or a hardware FPS benchmark: 1200 MiB, interleaved 128 KiB samples, 30 paired frames/second, a shared 16 MiB/s disk and 20 ms overhead/read. Physical reads fall from **600 to 19**, and read volume from **2399.88 to 1200.00 MiB**. In that model, playback-time storage waits fall from 299 to zero after an initial 4.02-second preparation (previous startup: 0.54 seconds). Peak reserved compressed input stays at 256 MiB. Actual results depend on the file layout, storage, browser, CPU/GPU and HEVC hardware; real-device smoothness still needs confirmation.

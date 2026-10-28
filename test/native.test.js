@@ -104,3 +104,46 @@ test('decoder failure releases input and cannot be revived by seek or play',asyn
   assert.equal(p.getDiagnostics().counters.seeks,before.counters.seeks);assert.equal(decoders.length,2);
  });
 });
+
+// A >64 MiB container backed only by its tiny header/metadata. Payload reads
+// are delayed explicitly, so lifecycle tests exercise the real chunked path
+// without camera footage or allocating a complete large recording.
+async function largeFixture(){
+ const small=new Uint8Array(await fixture({counts:[100,100]}).arrayBuffer());
+ const moov=small.slice(new DataView(small.buffer).getUint32(0)),mdatBytes=128*1024*1024;
+ const header=new Uint8Array(8);new DataView(header.buffer).setUint32(0,mdatBytes);header.set([109,100,97,116],4);
+ const pending=[],reads=[];
+ return {size:mdatBytes+moov.length,pending,reads,slice(start,end){return {arrayBuffer(){
+  const produce=()=>{const data=new Uint8Array(end-start);for(const [offset,bytes] of [[0,header],[mdatBytes,moov]]){const a=Math.max(start,offset),b=Math.min(end,offset+bytes.length);if(b>a)data.set(bytes.subarray(a-offset,b-offset),a-start);}return data.buffer;};
+  if(end-start<1024*1024)return Promise.resolve(produce());
+  reads.push([start,end]);return new Promise(resolve=>pending.push(()=>resolve(produce())));
+ }};}};
+}
+test('large-file player cancels seek reads before decoding and bounds raw I/O across rapid seeks',async()=>{
+ const keys=['isSecureContext','VideoDecoder','EncodedVideoChunk','requestAnimationFrame','cancelAnimationFrame'];
+ const saved=Object.fromEntries(keys.map(k=>[k,globalThis[k]])),decoders=[];let callback;
+ class Decoder{static async isConfigSupported(){return {supported:true};}constructor(){this.state='configured';this.chunks=[];decoders.push(this);}configure(){}decode(chunk){this.chunks.push(chunk);}close(){this.state='closed';}async flush(){}}
+ Object.assign(globalThis,{isSecureContext:true,VideoDecoder:Decoder,EncodedVideoChunk:class{constructor(x){Object.assign(this,x);}},requestAnimationFrame:cb=>{callback=cb;return 1;},cancelAnimationFrame:()=>{}});
+ const settle=()=>new Promise(resolve=>setImmediate(resolve));let player;
+ try{
+  const file=await largeFixture();player=await createNativePlayer(file,{onFrames(){assert.fail('No fake decoder output should be rendered');}});await settle();
+  assert.equal(player.getDiagnostics().version,5);assert.equal(player.getDiagnostics().inputState.strategy,'chunked-prefetch');
+  assert.equal(file.pending.length,1,'both tracks share the demand chunk');
+  for(let i=0;i<20;i++){player.seek((i%4)*.2);await settle();}
+  assert.equal(file.reads.length,2,'uncancelable old reads cap new allocations');
+  assert.ok(decoders.every(decoder=>!decoder.chunks.length));
+  file.pending.splice(0).forEach(finish=>finish());await settle();
+  assert.equal(file.pending.length,1,'only the newest generation starts after stale reads drain');
+  file.pending.shift()();await settle();callback(100);
+  assert.ok(decoders.slice(0,-2).every(decoder=>!decoder.chunks.length),'stale bytes never reach old decoders');
+  assert.deepEqual(decoders.slice(-2).map(decoder=>decoder.chunks.length),[24,24]);
+  const stats=player.getDiagnostics().input[0];assert.ok(stats.maxReservedBytes<=256*1024*1024);assert.equal(stats.maxActiveReads,2);assert.equal(stats.discardedReads,2);
+  player.close();assert.equal(player.getDiagnostics().input[0].cachedBytes,0);
+ }finally{player?.close();Object.assign(globalThis,saved);}
+});
+
+test('large-file unsupported codec never starts compressed payload preparation',async()=>{
+ const secure=globalThis.isSecureContext,decoder=globalThis.VideoDecoder;
+ try{globalThis.isSecureContext=true;globalThis.VideoDecoder=class{static async isConfigSupported(){return {supported:false};}};const file=await largeFixture();await assert.rejects(createNativePlayer(file,{onFrames(){}}),/cannot decode/);assert.equal(file.reads.length,0);}
+ finally{globalThis.isSecureContext=secure;globalThis.VideoDecoder=decoder;}
+});

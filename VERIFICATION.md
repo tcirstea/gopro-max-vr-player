@@ -2,7 +2,7 @@
 
 ## Passed
 
-- `npm test`: **40/40 tests**, Node 24.22.1.
+- `npm test`: **57/57 tests**, Node 24.22.1.
 - `node --check` for every `src/*.js` module.
 - Metadata/parser tests: single/dual tracks, native detection, codecs/dimensions, media-payload skipping, malformed/truncated/extended/zero-sized boxes, metadata limits and safe time formatting.
 - Native tests: sample offsets/timestamps, codec configuration strings, invalid offsets/dimensions/reordered timestamps, **mocked** paired decode, duration/seek behavior, frame cleanup, unsupported-codec and partial-configuration failure, separate decode-request/output backpressure and 24-sample hard outstanding cap.
@@ -57,3 +57,14 @@ Native audio, ambisonics, gyro stabilization, horizon leveling and optical-flow 
 - `npm test`: **40/40 passed**. All source syntax checks passed. Actual browser HEVC playback remains a real-device validation step; mocked tests establish byte/lifecycle correctness, not smoothness.
 
 - A decoder failure releases prepared input and cannot be revived by programmatic play/seek; reopen the file to retry. Regression coverage confirms this lifecycle.
+
+## Large-recording chunk preparation — 2026-10-28
+
+- Shared aligned **64 MiB** compressed chunks replace the per-track 4 MiB miss-only reads for files above 64 MiB. Pending and ready reads are deduplicated across tracks. Actual per-track sample-table transitions guide lookahead, including distant/non-sequential chunks; queued demand takes priority over speculation.
+- Four chunk slots bound cached plus in-flight input reservations to **256 MiB**, with at most two physical reads active. Returned samples are exact copies so a small sample cannot pin an evicted 64 MiB buffer. These copies add at most 32 MiB per active track; metadata, WebCodecs input/output, browser, and GPU allocations are outside this compressed cache budget.
+- Native seeking now resets input consumers and obsolete queued work as well as decoders. Blob reads cannot be physically canceled; their reservations remain charged until settlement, late results are discarded, and ready cache entries can survive nearby seeks. Closure rejects pending consumers immediately and releases ready buffers. Speculative errors are caught and only reported if the failed chunk is demanded.
+- Added 15 small-buffer tests for exact/cross-boundary/EOF sample bytes, concurrent deduplication, distant-track no-thrashing, actual-sample lookahead, delayed prefetch/cache-hit independence, demand priority, simultaneous boundary crossings, seek storms, cache reuse, stale completion, close, invalid/truncated input, speculative errors, and sparse fake 1200 MiB input.
+- Added mocked-decoder large-input integration tests: 20 seeks while physical reads are stalled, no obsolete input submitted to old decoders, reservation/concurrency bounds, and no payload reads before codec support checks. UI regression covers the large-buffer preparation message. Renderer and zoom code are unchanged.
+- `npm test`: **57/57 passed**; `node --check` passed for all source modules. These tests establish reader correctness/lifecycle, not actual browser HEVC smoothness.
+- `node scripts/benchmark-input.mjs`: deterministic synthetic 1200 MiB interleaved recording with a serial 16 MiB/s disk, 20 ms per physical read, 128 KiB samples and 30 paired frames/second. Physical reads: **600 → 19**. Read volume: **2399.88 → 1200.00 MiB**. Initial preparation: **0.54 → 4.02 s**. Playback storage waits: **299 → 0**, with total modeled read waiting **161.992 → 4.020 s**. Peak reserved compressed input: **256 MiB**, maximum simultaneous reads: **2**. This is a model of read scheduling and duplicated input work, not a measured device throughput, decoder FPS, or promise of stutter-free playback.
+- No original large recording or device diagnostics were available for this change. Real HEVC/GPU performance, actual storage latency, and target-device memory pressure remain user-device acceptance checks.

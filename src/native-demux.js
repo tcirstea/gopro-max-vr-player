@@ -1,5 +1,6 @@
 // Original, bounded ISO-BMFF sample demuxer. Metadata inspection skips video payload.
 import {readMovie, children, descend} from './inspect.js';
+import {createChunkedInput} from './chunked-input.js';
 const MAX_SAMPLES=1_000_000, MAX_SAMPLE_BYTES=32*1024*1024;
 export const READ_AHEAD_BYTES=4*1024*1024;
 // File-backed Blob reads can incur a task/IPC round trip per call. Amortize that
@@ -31,25 +32,27 @@ export function createSampleReader(file,windowBytes=READ_AHEAD_BYTES){
 // Short clips can cost more to read than to decode. Stage a single bounded
 // local copy before supplying either decoder; long recordings remain streamed.
 export const SMALL_FILE_PRELOAD_BYTES=64*1024*1024;
-export function createMovieInput(file){
- const shared=file.size<=SMALL_FILE_PRELOAD_BYTES;
- const readers=shared?[createSampleReader(file,SMALL_FILE_PRELOAD_BYTES)]:[createSampleReader(file),createSampleReader(file)];
- let preparation=null,ready=!shared,closed=false;
+export function createMovieInput(file,tracks=[]){
+ if(file.size>SMALL_FILE_PRELOAD_BYTES){
+  const input=createChunkedInput(file,{tracks});
+  return {read:(...args)=>input.read(...args),reset:()=>input.reset(),close:()=>input.close(),getReadDiagnostics:()=>[input.getDiagnostics()],getInputState:()=>({...input.getInputState(),preloadLimitBytes:SMALL_FILE_PRELOAD_BYTES})};
+ }
+ const reader=createSampleReader(file,SMALL_FILE_PRELOAD_BYTES);
+ let preparation=null,ready=false,closed=false;
  return {
-  async read(sample,trackIndex=0){
+  async read(sample){
    if(closed)throw new Error('Local video input is closed.');
-   if(shared){
-    // The one-byte sample asks the reader for its whole bounded window. Both
-    // tracks await this same promise; seeking reuses the prepared local bytes.
-    preparation??=readers[0].read({offset:0,size:1}).then(()=>{if(!closed)ready=true;});
-    await preparation;
-    if(closed)throw new Error('Local video input is closed.');
-   }
-   return readers[shared?0:trackIndex].read(sample);
+   // The one-byte sample asks the reader for its whole bounded window. Both
+   // tracks await this same promise; seeking reuses the prepared local bytes.
+   preparation??=reader.read({offset:0,size:1}).then(()=>{if(!closed)ready=true;});
+   await preparation;
+   if(closed)throw new Error('Local video input is closed.');
+   return reader.read(sample);
   },
-  getReadDiagnostics(){return readers.map(r=>r.getDiagnostics());},
-  getInputState(){return {strategy:shared?'preload-small-file':'streamed-windows',preparing:shared&&!ready&&!closed,preloadLimitBytes:SMALL_FILE_PRELOAD_BYTES};},
-  close(){closed=true;readers.forEach(r=>r.clear());preparation=null;}
+  getReadDiagnostics(){return [reader.getDiagnostics()];},
+  getInputState(){return {strategy:'preload-small-file',preparing:!ready&&!closed,preloadLimitBytes:SMALL_FILE_PRELOAD_BYTES};},
+  reset(){}, // Prepared short clips remain reusable across seeks.
+  close(){closed=true;reader.clear();preparation=null;}
  };
 }
 function requireBox(v,p,path){const b=descend(v,p,path);if(!b)throw new Error(`Missing ${path.join('/')} table.`);return b;}
@@ -95,5 +98,5 @@ export async function demuxNative(file){
  }
  if(tracks.length!==2)throw new Error('Expected exactly two native MAX video tracks.');
  if(tracks.some(t=>t.config.codedWidth!==4096||t.config.codedHeight!==1344))throw new Error('This experimental MAX layout currently supports 4096 × 1344 tracks only.');
- return {tracks,duration:Math.min(...tracks.map(t=>t.duration)),...createMovieInput(file)};
+ return {tracks,duration:Math.min(...tracks.map(t=>t.duration)),...createMovieInput(file,tracks)};
 }
