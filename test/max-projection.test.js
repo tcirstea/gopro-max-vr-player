@@ -1,0 +1,10 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {maxLayout,maxCoordinates,MAX_LAYOUTS} from '../src/max-projection.js';
+import {invert4} from '../src/renderer.js';
+test('accepts only known MAX frame templates',()=>{assert.equal(maxLayout(4096,1344).blend,32);assert.equal(maxLayout(2272,736).blend,16);assert.throws(()=>maxLayout(4096,2048),/Unsupported/);});
+test('six principal rays select original MAX faces and track rotation',()=>{for(const [d,face,track]of [[[0,0,-1],'front',0],[[0,0,1],'back',1],[[-1,0,0],'left',0],[[1,0,0],'right',0],[[0,1,0],'top',1],[[0,-1,0],'down',1]]){const r=maxCoordinates(d);assert.equal(r.face,face);assert.equal(r.track,track);assert.ok(Math.abs(r.uv1[1]-.5)<1e-6);if(!['front','back'].includes(face))assert.ok(Math.abs(r.alpha-.5)<1e-6);}});
+test('overlap blend samples distinct sides and weights are bounded',()=>{for(const layout of MAX_LAYOUTS){const r=maxCoordinates([-1,0,0],layout);assert.ok(Math.abs((r.uv2[0]-r.uv1[0])*layout.width-2*layout.blend)<1e-6);assert.equal(maxCoordinates([-1,0,-.9],layout).alpha,1);assert.equal(maxCoordinates([-1,0,.9],layout).alpha,0);}});
+test('all directions remain in texture bounds',()=>{for(const layout of MAX_LAYOUTS)for(let j=-90;j<=90;j+=3)for(let i=-180;i<=180;i+=3){const lat=j*Math.PI/180,lng=i*Math.PI/180;const r=maxCoordinates([Math.sin(lng)*Math.cos(lat),Math.sin(lat),-Math.cos(lng)*Math.cos(lat)],layout);for(const n of [...r.uv1,...r.uv2])assert.ok(n>0&&n<1);assert.ok(r.alpha>=0&&r.alpha<=1);}});
+test('rejects zero and nonfinite directions',()=>{assert.throws(()=>maxCoordinates([0,0,0]));assert.throws(()=>maxCoordinates([Infinity,0,0]));});
+test('inverse projection handles asymmetric perspective',()=>{const m=[2,0,0,0,0,3,0,0,.2,.1,-1.01,-1,0,0,-.2,0],inv=invert4(m);for(let r=0;r<4;r++)for(let c=0;c<4;c++){let n=0;for(let k=0;k<4;k++)n+=m[k*4+r]*inv[c*4+k];assert.ok(Math.abs(n-+(c===r))<1e-5);}assert.throws(()=>invert4(new Float32Array(16)),/Singular/);});

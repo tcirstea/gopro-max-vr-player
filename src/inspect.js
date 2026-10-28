@@ -13,7 +13,7 @@ function header(v, offset, limit) {
   if (!Number.isSafeInteger(size) || size < bytes) throw new Error('Invalid MP4 box size.');
   return {type, size, bytes};
 }
-function children(v, start, end) {
+export function children(v, start, end) {
   const result = []; let offset = start;
   while (offset < end) {
     if (result.length >= MAX_BOXES) throw new Error('Too many MP4 boxes.');
@@ -23,7 +23,7 @@ function children(v, start, end) {
   }
   return result;
 }
-function descend(v, parent, path) {
+export function descend(v, parent, path) {
   let box = parent;
   for (const type of path) {
     box = children(v, box.start, box.end).find(b => b.type === type);
@@ -31,7 +31,7 @@ function descend(v, parent, path) {
   }
   return box;
 }
-export async function inspectFile(file) {
+export async function readMovie(file) {
   let offset = 0, count = 0, moov = null, brand = null;
   while (offset < file.size) {
     if (++count > MAX_BOXES) throw new Error('Too many top-level MP4 boxes.');
@@ -48,6 +48,10 @@ export async function inspectFile(file) {
     offset += b.size;
   }
   if (!moov) throw new Error('No MP4 movie metadata found. Select an MP4 or GoPro .360 file.');
+  return {moov, brand};
+}
+export async function inspectFile(file) {
+  const {moov, brand} = await readMovie(file);
   const tracks = children(moov, 0, moov.byteLength).filter(b => b.type === 'trak').map(trak => {
     const handler = descend(moov, trak, ['mdia', 'hdlr']);
     const stsd = descend(moov, trak, ['mdia', 'minf', 'stbl', 'stsd']);

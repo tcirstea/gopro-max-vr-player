@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
-      - run: mkdir _site && cp index.html _site/ && cp -r src _site/ && touch _site/.nojekyll
+      - run: mkdir _site && cp index.html _site/ && cp -r src licenses _site/ && cp THIRD_PARTY_NOTICES.md _site/ && touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

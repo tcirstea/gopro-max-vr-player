@@ -1,28 +1,35 @@
-# Initial verification — 2026-10-28
+# Verification — 2026-10-28
 
 ## Passed
 
-- `npm test`: 11/11 tests (Node 24.22.1).
-- `node --check src/app.js`, `src/renderer.js`, `src/inspect.js`.
-- Parser tests cover single and dual video tracks, native extension detection, codec/dimensions, ftyp, skipping media data, truncated/invalid boxes, absent metadata, extended and zero-sized boxes, oversized metadata, malformed sample entries and safe time formatting.
-- Real original MAX sample inspected successfully using bounded file reads: brand `mp41`, two `hvc1` video tracks at 4096 × 1344, `mp4a` and `in32` audio, `tmcd`, `gpmd`, and `fdsc` ancillary tracks. Correctly classified as a native/multi-track candidate even with an `.mp4` filename suffix. The private sample remains outside the repository.
-- Source review: local Blob URLs only for video; no fetch/upload path or runtime CDN dependency. CSP disables network connections and limits media to Blob URLs.
+- `npm test`: **24/24 tests**, Node 24.22.1.
+- `node --check` for every `src/*.js` module.
+- Metadata/parser tests: single/dual tracks, native detection, codecs/dimensions, media-payload skipping, malformed/truncated/extended/zero-sized boxes, metadata limits and safe time formatting.
+- Native tests: sample offsets/timestamps, codec configuration strings, invalid offsets/dimensions/reordered timestamps, **mocked** paired decode, duration/seek behavior, frame cleanup, unsupported-codec and partial-configuration failure, eight-sample-per-stream backpressure.
+- Projection tests: known templates, face/track rotations, overlap coordinates/weights, sphere-wide bounds, invalid rays and asymmetric projection-matrix inversion.
+- Source review found no runtime fetch/upload path or CDN dependency. CSP disables network connections and limits browser video media to Blob URLs.
+
+No camera recordings or derived previews are included in the repository or deployed site.
 
 ## Not yet verified
 
-- Actual browser rendering, playback, seeking, fullscreen and mobile layouts.
-- Native HEVC decoding or GoPro projection reconstruction (metadata inspection only was verified against a real camera sample).
-- GitHub Actions execution and live Pages deployment.
-- Headset WebXR (not implemented).
+- Actual WebCodecs HEVC decoding and sustained simultaneous two-decoder performance in a browser.
+- WebGL shader compilation/pixels, full-resolution native rendering, orientation/seam quality during playback.
+- Browser play/pause, seeking, fullscreen, source switching and mobile/touch layout/interaction.
+- Actual immersive WebXR sessions, per-eye output, controllers and session lifecycle on a headset.
 
-Browser QA was attempted. The workspace Chromium launch failed because the sandbox denied socket creation. An escalated launch failed during sandbox setup with a read-only filesystem error. The connected browser did not reach the workspace static server: localhost:8000 served an unrelated authentication service, and localhost:8765 refused the connection. These are test-environment failures, not evidence of a passing or failing UI.
+Browser QA was attempted. Workspace Chromium failed before loading the page because the sandbox denied socket creation. An escalated launch failed during sandbox setup with a read-only filesystem error. The connected browser could not reach the workspace static server. These are test-environment failures, not passing UI checks. Automated unit tests use mocked decoders and cannot establish actual hardware compatibility.
 
-## Next manual/browser checks
+## Remaining implementation limits
 
-1. Run the static server on the browser's machine; load the generated panorama and check console errors.
-2. Drag, use arrow keys, scroll and +/- zoom; reset repeatedly. Check touch drag and narrow-screen layout.
-3. Open a known stitched 2:1 browser-decodable video; confirm projection, play/pause, mute, seek while paused/playing and end-of-file replay.
-4. Switch clips rapidly, re-open the same clip, select a corrupt file, then return to demo. Ensure stale inspection results cannot replace the latest selection.
-5. Select original MAX .360 and renamed dual-track MP4. Verify inspection only and explicit native-not-supported messaging.
-6. Enter/exit fullscreen; test WebGL unavailable/context-loss behavior.
-7. Verify the final public URL at its repository subpath and test in target browsers before announcing availability.
+Native audio, ambisonics, gyro stabilization, horizon leveling and optical-flow seam correction are absent. Duplicated-overlap blending is implemented. Native demux currently accepts 4096×1344 paired HEVC tracks and rejects reordered timestamps and nonzero edit offsets; MAX2 is not validated. The 2272×736 renderer template is not yet enabled through native demux.
+
+## Browser acceptance checks
+
+1. Open the generated demo; check graphics errors, drag/arrows/zoom/reset, narrow-screen layout and touch interaction.
+2. Open suitable original MAX test media on a HEVC-capable browser. Verify both decoders, orientation, overlap seams and motion against a trusted export.
+3. Play/pause, seek while paused/playing, replay after end, seek rapidly, and switch between native/equirectangular/demo repeatedly. Ensure old events and frames do not affect the newer source.
+4. Test corrupt/unsupported files, unavailable WebCodecs/HEVC, partial decoder failure, GPU limits and WebGL context loss.
+5. Test equirectangular playback and audio/mute independently; native playback should remain clearly silent.
+6. Enter/exit fullscreen and immersive WebXR, including interruption and reentry; validate both eyes and fixed-position panorama behavior on a physical headset.
+7. Verify the deployed commit and live repository-subpath URL separately. This local verification record does not certify a particular GitHub Actions run or deployment.
