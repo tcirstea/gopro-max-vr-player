@@ -18,7 +18,7 @@ test('dual decoder pairs timestamps, stops at common duration, seeks and closes 
  const frames=[],presented=[];let callback;
  class FakeDecoder{static async isConfigSupported(config){return {supported:true,config};}constructor(opts){this.opts=opts;this.state='unconfigured';}configure(){this.state='configured';}decode(chunk){queueMicrotask(()=>{if(this.state==='closed')return;const f={timestamp:chunk.timestamp,duration:chunk.duration,closed:false,close(){this.closed=true;}};frames.push(f);this.opts.output(f);});}async flush(){}close(){this.state='closed';}}
  Object.assign(globalThis,{isSecureContext:true,VideoDecoder:FakeDecoder,EncodedVideoChunk:class{constructor(x){Object.assign(this,x);}},requestAnimationFrame:cb=>{callback=cb;return 1;},cancelAnimationFrame:()=>{}});
- try{const p=await createNativePlayer(fixture(),{onFrames:(a,b)=>{assert.equal(a.timestamp,b.timestamp);presented.push(a.timestamp);},onError:e=>{throw e;}});await new Promise(r=>setImmediate(r));callback(performance.now());assert.deepEqual(presented,[0]);p.play();callback(performance.now()+100);assert.equal(p.playing,false);assert.deepEqual(presented,[0,40000]);p.seek(.04);await new Promise(r=>setImmediate(r));callback(performance.now());assert.equal(presented.at(-1),40000);p.close();assert.ok(frames.every(f=>f.closed));}finally{Object.assign(globalThis,saved);}
+ try{const p=await createNativePlayer(fixture(),{onFrames:(a,b)=>{assert.equal(a.timestamp,b.timestamp);presented.push(a.timestamp);},onError:e=>{throw e;}});await new Promise(r=>setImmediate(r));callback(performance.now());assert.deepEqual(presented,[0]);p.play();const now=performance.now();callback(now);callback(now+100);assert.equal(p.playing,false);assert.deepEqual(presented,[0,40000]);p.seek(.04);await new Promise(r=>setImmediate(r));callback(performance.now());assert.equal(presented.at(-1),40000);p.close();assert.ok(frames.every(f=>f.closed));}finally{Object.assign(globalThis,saved);}
 });
 test('native unsupported codec fails before allocating decoders',async()=>{
  const secure=globalThis.isSecureContext,decoder=globalThis.VideoDecoder;
@@ -28,9 +28,68 @@ test('native partial decoder configuration failure releases allocated resources'
  const secure=globalThis.isSecureContext,decoder=globalThis.VideoDecoder;let allocations=0,closed=0;
  try{globalThis.isSecureContext=true;globalThis.VideoDecoder=class{static async isConfigSupported(){return {supported:true};}constructor(){this.state='unconfigured';allocations++;}configure(){if(allocations===2)throw new Error('Hardware exhausted');this.state='configured';}close(){this.state='closed';closed++;}};await assert.rejects(createNativePlayer(fixture(),{onFrames(){}}),/Hardware exhausted/);assert.equal(closed,2);}finally{globalThis.isSecureContext=secure;globalThis.VideoDecoder=decoder;}
 });
-test('decoder backpressure bounds pending compressed samples to eight per stream',async()=>{
+test('decoder backpressure bounds retained inputs even if codec never emits',async()=>{
  const saved={};for(const k of ['isSecureContext','VideoDecoder','EncodedVideoChunk','requestAnimationFrame','cancelAnimationFrame'])saved[k]=globalThis[k];const counts=[];
  class Decoder{static async isConfigSupported(){return {supported:true};}constructor(){this.i=counts.length;counts.push(0);this.state='configured';}configure(){}decode(){counts[this.i]++;}close(){this.state='closed';}async flush(){}}
  Object.assign(globalThis,{isSecureContext:true,VideoDecoder:Decoder,EncodedVideoChunk:class{},requestAnimationFrame:()=>1,cancelAnimationFrame:()=>{}});
- try{const p=await createNativePlayer(fixture({counts:[20,20]}),{onFrames(){}});await new Promise(r=>setImmediate(r));assert.deepEqual(counts,[8,8]);p.close();}finally{Object.assign(globalThis,saved);}
+ try{const p=await createNativePlayer(fixture({counts:[40,40]}),{onFrames(){}});await new Promise(r=>setImmediate(r));assert.deepEqual(counts,[24,24]);p.close();}finally{Object.assign(globalThis,saved);}
+});
+
+// Simulates codecs whose requests dequeue immediately but outputs are held by
+// the hardware until a batch is available (unlike immediate-output mocks).
+async function delayedHarness(run){
+ const keys=['isSecureContext','VideoDecoder','EncodedVideoChunk','requestAnimationFrame','cancelAnimationFrame'];
+ const saved=Object.fromEntries(keys.map(k=>[k,globalThis[k]]));
+ const decoders=[],allFrames=[],presented=[];let callback;
+ class Decoder{
+  static async isConfigSupported(){return {supported:true};}
+  constructor(opts){this.opts=opts;this.state='configured';this.chunks=[];this.decodeQueueSize=0;decoders.push(this);}
+  configure(){} decode(chunk){this.chunks.push(chunk);}
+  emit(count=Infinity){for(const chunk of this.chunks.splice(0,count)){const f={timestamp:chunk.timestamp,duration:chunk.duration,closed:false,close(){this.closed=true;}};allFrames.push(f);this.opts.output(f);}}
+  async flush(){this.emit();} close(){this.state='closed';}
+ }
+ Object.assign(globalThis,{isSecureContext:true,VideoDecoder:Decoder,EncodedVideoChunk:class{constructor(x){Object.assign(this,x);}},requestAnimationFrame:cb=>{callback=cb;return 1;},cancelAnimationFrame:()=>{}});
+ const settle=()=>new Promise(r=>setImmediate(r));
+ let p;
+ try{p=await createNativePlayer(fixture({counts:[100,100]}),{onFrames:(a,b)=>{assert.equal(a.timestamp,b.timestamp);presented.push(a.timestamp);}});await settle();await run({p,decoders,allFrames,presented,tick:n=>callback(n),settle});}
+ finally{p?.close();assert.ok(allFrames.every(f=>f.closed));Object.assign(globalThis,saved);}
+}
+test('delayed outputs beyond eight inputs can progress; only one paired upload per animation frame',async()=>{
+ await delayedHarness(async({p,decoders,presented,tick,settle})=>{
+  assert.deepEqual(decoders.map(d=>d.chunks.length),[24,24]);
+  decoders.forEach(d=>d.emit(12));await settle();tick(0);assert.deepEqual(presented,[0]);
+  p.play();tick(10);tick(110);assert.equal(presented.length,2);assert.equal(presented.at(-1),80000);
+  assert.equal(p.getDiagnostics().counters.droppedPairs,1);
+ });
+});
+test('decoder starvation freezes clock and never falsely reaches end; resumes without skipping footage',async()=>{
+ await delayedHarness(async({p,decoders,presented,tick,settle})=>{
+  decoders.forEach(d=>d.emit(4));await settle();tick(0);p.play();tick(1);tick(101);tick(201);
+  const before=p.getDiagnostics();assert.equal(before.state.buffering,true);assert.ok(before.state.mediaClock<.2);
+  for(let n=301;n<10000;n+=100)tick(n);
+  assert.equal(p.playing,true);assert.equal(p.getDiagnostics().state.mediaClock,before.state.mediaClock);
+  // One decoder alone must not cause a mismatched upload or advance time.
+  decoders[0].emit(4);await settle();tick(10001);assert.equal(p.getDiagnostics().state.buffering,true);
+  decoders[1].emit(4);await settle();tick(10101);
+  assert.equal(p.getDiagnostics().state.buffering,false);assert.equal(presented.at(-1),160000);
+  assert.ok(p.getDiagnostics().state.mediaClock<.2);
+ });
+});
+test('seeking while playing rebuffers and stale decoder output is closed',async()=>{
+ await delayedHarness(async({p,decoders,allFrames,tick,settle})=>{
+  p.play();p.seek(1);const old=decoders.slice(0,2);old.forEach(d=>d.emit());await settle();
+  assert.ok(allFrames.every(f=>f.closed));tick(10000);assert.equal(p.getDiagnostics().state.mediaClock,1);
+  p.pause();assert.equal(p.getDiagnostics().state.buffering,false);
+ });
+});
+test('batched decode drains to actual final pair, then replay starts from zero',async()=>{
+ await delayedHarness(async({p,decoders,presented,tick,settle})=>{
+  p.play();
+  for(let now=0;now<7000&&p.playing;now+=40){decoders.slice(0,2).forEach(d=>d.emit(4));await settle();tick(now);}
+  assert.equal(p.playing,false);assert.equal(p.getDiagnostics().state.currentTime,4);
+  assert.equal(presented.at(-1),3960000);
+  p.play();assert.equal(p.playing,true);assert.equal(p.getDiagnostics().state.mediaClock,0);
+  await settle();decoders.slice(2).forEach(d=>d.emit(4));await settle();tick(8000);
+  assert.equal(presented.at(-1),0);
+ });
 });

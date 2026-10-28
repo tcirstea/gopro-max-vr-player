@@ -41,7 +41,7 @@ For an exported, already-stitched video, select **View as equirectangular video*
 
 ## Verification
 
-See [VERIFICATION.md](VERIFICATION.md) for exact checks and gaps. The current suite has **24 passing tests**, including parser limits, sample tables, mocked decoding lifecycle and EAC projection math. No camera recordings or derived previews are included in this repository.
+See [VERIFICATION.md](VERIFICATION.md) for exact checks and gaps. The current suite has **29 passing tests**, including parser limits, sample tables, mocked decoding lifecycle and EAC projection math. No camera recordings or derived previews are included in this repository.
 
 ## GitHub Pages
 
@@ -64,3 +64,7 @@ Original MAX `.360` files are not ordinary equirectangular videos. GoPro stitche
 - [GoPro: MAX stitching and resolution](https://gopro.com/en/dm/news/max-tech-specs-stitching-resolution)
 - [Trek View max2sphere](https://github.com/trek-view/max2sphere/blob/main/max2sphere.c): projection/blending reference, Apache-2.0; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - [MAX_RENDERER.md](MAX_RENDERER.md): renderer API, ownership and projection validation.
+
+## Playback diagnostics
+
+Native playback now pauses its media clock while buffering paired frames, rather than skipping ahead during a decoder stall. If playback still buffers repeatedly, choose **Save playback diagnostics** after reproducing it. The downloaded JSON contains only technical counters, queue sizes, codec dimensions and timings; no filename, footage, audio, path or automatic upload. Share that report manually if troubleshooting is needed. Hardware performance remains device-dependent.

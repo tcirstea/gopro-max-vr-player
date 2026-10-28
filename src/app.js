@@ -4,10 +4,11 @@ import {createRenderer,demoPanorama} from './renderer.js';
 const $=id=>document.getElementById(id), video=$('video');
 let renderer,objectURL=null,generation=0,pendingFile=null,nativePlayer=null;
 const status=message=>$('status').textContent=message;
+function playbackStatus(message){const element=$('playback-state');if(element.textContent!==message)element.textContent=message;element.hidden=!message;}
 try{renderer=createRenderer($('canvas'));renderer.setSource(demoPanorama());}catch(error){status(error.message);}
 const hasHEVC=video.canPlayType('video/mp4; codecs="hvc1.1.6.L153.B0"');
 $('capabilities').textContent=`This browser: WebGL ${renderer?'available':'unavailable'} · WebCodecs ${'VideoDecoder' in window?'available':'unavailable'} · HEVC media hint: ${hasHEVC||'not reported'}. These hints do not validate native MAX playback.`;
-function clearMedia(){nativePlayer?.close();nativePlayer=null;$('play').textContent='Play';$('muted').disabled=false;video.muted=$('muted').checked;video.pause();video.removeAttribute('src');video.load();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=null;pendingFile=null;$('play').disabled=true;$('seek').disabled=true;$('seek').value=0;$('time').textContent='0:00 / 0:00';$('equirect').hidden=true;renderer?.setSource(demoPanorama());$('source').textContent='DEMO PANORAMA';$('view-title').textContent='Take a look around';}
+function clearMedia(){nativePlayer?.close();nativePlayer=null;$('diagnostics-panel').hidden=true;playbackStatus('');$('play').textContent='Play';$('muted').disabled=false;video.muted=$('muted').checked;video.pause();video.removeAttribute('src');video.load();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=null;pendingFile=null;$('play').disabled=true;$('seek').disabled=true;$('seek').value=0;$('time').textContent='0:00 / 0:00';$('equirect').hidden=true;renderer?.setSource(demoPanorama());$('source').textContent='DEMO PANORAMA';$('view-title').textContent='Take a look around';}
 async function openFile(file){
  const current=++generation;clearMedia();$('filename').textContent=file.name;$('metadata').textContent='';status('Inspecting local container metadata…');
  try{const info=await inspectFile(file);if(current!==generation)return;
@@ -17,16 +18,26 @@ async function openFile(file){
   status('Native dual-track candidate detected. Checking HEVC decoders and loading paired frames locally…');
   const player=await createNativePlayer(file,{
    onFrames(a,b){if(current!==generation)return;renderer.setMaxSources(a,b);$('source').textContent='LOCAL MAX · EXPERIMENTAL EAC';$('view-title').textContent='Your point of view';},
-   onState(state){if(current!==generation)return;$('play').textContent=state.playing?'Pause':'Play';$('time').textContent=`${formatTime(state.currentTime)} / ${formatTime(state.duration)}`;$('seek').value=state.currentTime/state.duration*1000;},
-   onError(error){if(current===generation){$('play').disabled=true;$('seek').disabled=true;status(`Native decoder stopped: ${error.message}`);}}
+   onState(state){if(current!==generation)return;playbackStatus(state.buffering?'Buffering paired video frames… Playback time is held until frames are ready.':state.playing?'Playing locally · Native audio unavailable.':'');$('play').textContent=state.playing?'Pause':'Play';$('time').textContent=`${formatTime(state.currentTime)} / ${formatTime(state.duration)}`;$('seek').value=state.currentTime/state.duration*1000;},
+   onError(error){if(current===generation){playbackStatus('');$('play').disabled=true;$('seek').disabled=true;status(`Native decoder stopped: ${error.message}`);}}
   });
-  if(current!==generation){player.close();return;}nativePlayer=player;$('play').disabled=false;$('seek').disabled=false;$('muted').checked=true;video.muted=true;$('muted').disabled=true;
+  if(current!==generation){player.close();return;}nativePlayer=player;$('diagnostics-panel').hidden=false;$('play').disabled=false;$('seek').disabled=false;$('muted').checked=true;video.muted=true;$('muted').disabled=true;
   status('Experimental native MAX pipeline opened locally. Press Play. Dual HEVC frames are mapped as EAC; overlap blending is included; audio, gyro stabilization, and optical-flow seam correction are not implemented. Codec support does not guarantee real-time playback.');return;
  }
  if(!info.videoTracks.length){status('No video track found in this container.');return;}
  pendingFile=file;$('equirect').hidden=false;status('Container inspected. If this is an already-stitched equirectangular (2:1) video, choose “View as equirectangular video”. Ordinary flat videos will appear distorted. Browser codec support is checked when loading.');
  }catch(error){if(current===generation)status(`Cannot open this file: ${error.message}`);}
 }
+$('download-diagnostics').addEventListener('click',()=>{
+ if(!nativePlayer)return;
+ try{
+  // Only the player's allowlisted technical snapshot is exported; never DOM text or the File.
+  const report={reportFormat:'max-playback-diagnostics-v1',privacy:'No media, filenames, paths or audio. Created locally; not uploaded.',playback:nativePlayer.getDiagnostics()};
+  const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+  const link=document.createElement('a');link.href=url;link.download='max-playback-diagnostics.json';document.body.append(link);
+  try{link.click();}finally{link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+ }catch{status('Could not save the local diagnostics report. Playback has not been changed.');}
+});
 $('file').addEventListener('change',e=>{const file=e.target.files[0];if(file)openFile(file);e.target.value='';});
 $('equirect').addEventListener('click',()=>{if(!pendingFile||!renderer)return;$('equirect').hidden=true;objectURL=URL.createObjectURL(pendingFile);video.src=objectURL;video.load();status('Loading local video with the browser decoder…');});
 video.addEventListener('loadeddata',()=>{if(!objectURL)return;renderer?.setSource(video);$('source').textContent='LOCAL EQUIRECTANGULAR VIDEO';$('view-title').textContent='Your point of view';$('play').disabled=false;$('seek').disabled=false;status(`Video decoded locally: ${video.videoWidth} × ${video.videoHeight}. Press Play to explore.${Math.abs(video.videoWidth/video.videoHeight-2)>.05?' Warning: this is not a 2:1 frame; verify its projection.':''}`);});
