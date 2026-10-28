@@ -1,6 +1,33 @@
 // Original, bounded ISO-BMFF sample demuxer. No video payload is loaded at open.
 import {readMovie, children, descend} from './inspect.js';
 const MAX_SAMPLES=1_000_000, MAX_SAMPLE_BYTES=32*1024*1024;
+export const READ_AHEAD_BYTES=4*1024*1024;
+// File-backed Blob reads can incur a task/IPC round trip per call. Amortize that
+// cost over a bounded window instead of awaiting a fresh read for every frame.
+// One reader per track prevents distant/interleaved tracks evicting each other.
+export function createSampleReader(file,windowBytes=READ_AHEAD_BYTES){
+ let cached=null,cacheStart=0,request=0;
+ const stats={readOperations:0,bytesRead:0,cacheHits:0,readMilliseconds:0,maxReadMilliseconds:0};
+ return {
+  async read(sample){
+   const token=++request;
+   const {offset,size}=sample;
+   if(!Number.isSafeInteger(offset)||!Number.isSafeInteger(size)||offset<0||size<=0||size>MAX_SAMPLE_BYTES||offset+size>file.size)throw new Error('Sample points outside the local file or exceeds the safety limit.');
+   if(cached&&offset>=cacheStart&&offset+size<=cacheStart+cached.byteLength){stats.cacheHits++;return new Uint8Array(cached,offset-cacheStart,size);}
+   // Large samples use an exact read and are not retained in the cache.
+   const end=Math.min(file.size,offset+Math.max(size,windowBytes));
+   const start=performance.now();stats.readOperations++;
+   const data=await file.slice(offset,end).arrayBuffer();
+   const elapsed=performance.now()-start;stats.readMilliseconds+=elapsed;stats.maxReadMilliseconds=Math.max(stats.maxReadMilliseconds,elapsed);stats.bytesRead+=data.byteLength;
+   if(data.byteLength!==end-offset)throw new Error('Truncated video sample read window.');
+   if(token===request){if(size<=windowBytes){cached=data;cacheStart=offset;}else{cached=null;}}
+   // Use this call's buffer, not shared cache state: seek reads can overlap.
+   return new Uint8Array(data,0,size);
+  },
+  getDiagnostics(){return {...stats,cachedBytes:cached?.byteLength||0,readAheadBytes:windowBytes};},
+  clear(){request++;cached=null;}
+ };
+}
 function requireBox(v,p,path){const b=descend(v,p,path);if(!b)throw new Error(`Missing ${path.join('/')} table.`);return b;}
 function table(v,b,stride){if(b.start+8>b.end)throw new Error('Truncated sample table.');const n=v.getUint32(b.start+4);if(n>MAX_SAMPLES||b.start+8+n*stride>b.end)throw new Error('Invalid or oversized sample table.');return Array.from({length:n},(_,i)=>b.start+8+i*stride);}
 export function hevcCodec(bytes, prefix='hvc1'){
@@ -44,5 +71,6 @@ export async function demuxNative(file){
  }
  if(tracks.length!==2)throw new Error('Expected exactly two native MAX video tracks.');
  if(tracks.some(t=>t.config.codedWidth!==4096||t.config.codedHeight!==1344))throw new Error('This experimental MAX layout currently supports 4096 × 1344 tracks only.');
- return {tracks,duration:Math.min(...tracks.map(t=>t.duration)),async read(sample){const data=await file.slice(sample.offset,sample.offset+sample.size).arrayBuffer();if(data.byteLength!==sample.size)throw new Error('Truncated video sample.');return data;}};
+ const readers=tracks.map(()=>createSampleReader(file));
+ return {tracks,duration:Math.min(...tracks.map(t=>t.duration)),read(sample,trackIndex=0){return readers[trackIndex].read(sample);},getReadDiagnostics(){return readers.map(r=>r.getDiagnostics());},close(){readers.forEach(r=>r.clear());}};
 }

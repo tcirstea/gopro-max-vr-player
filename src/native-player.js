@@ -8,7 +8,7 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
  const configs=movie.tracks.map(t=>({...t.config,hardwareAcceleration:'prefer-hardware',optimizeForLatency:true}));
  for(const config of configs){const result=await VideoDecoder.isConfigSupported(config);if(!result.supported)throw new Error(`This device cannot decode ${config.codec} at ${config.codedWidth} × ${config.codedHeight} through WebCodecs. Try a browser/OS with hardware HEVC support.`);}
  let generation=0,closed=false,playing=false,buffering=false,currentTime=0,target=0,mediaClock=0,lastTick=null,streams=[],shown=[],shownEnd=0,raf=0,failed=false;
- const stats={presentedPairs:0,droppedPairs:0,unpairedFrames:0,bufferingEvents:0,seeks:0,uploadMilliseconds:0,maxUploadMilliseconds:0};
+ const stats={presentedPairs:0,droppedPairs:0,unpairedFrames:0,bufferingEvents:0,seeks:0,uploadMilliseconds:0,maxUploadMilliseconds:0,animationTicks:0,maxAnimationGapMilliseconds:0};
  const notify=()=>onState({playing,buffering,currentTime,duration:movie.duration});
  const dispose=()=>{for(const s of streams){if(s.decoder.state!=='closed')s.decoder.close();s.frames.forEach(f=>f.close());}streams=[];};
  function fail(error){if(closed||failed)return;failed=true;playing=false;buffering=false;notify();onError(error);dispose();}
@@ -17,8 +17,9 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
   s.reading=true;
   (async()=>{try{
    while(g===generation&&!closed&&!failed&&s.index<s.track.samples.length&&s.frames.length<OUTPUT_BUFFER&&s.pending+s.frames.length<MAX_IN_FLIGHT&&(s.decoder.decodeQueueSize||0)<DECODE_QUEUE){
-    const sample=s.track.samples[s.index++];const data=await movie.read(sample);if(g!==generation||closed||failed)return;
+    const sample=s.track.samples[s.index++];const data=await movie.read(sample,s.trackIndex);if(g!==generation||closed||failed)return;
     s.pending++;s.submitted++;s.maxInFlight=Math.max(s.maxInFlight,s.pending+s.frames.length);
+    s.submittedAt.set(sample.timestamp,performance.now());
     s.decoder.decode(new EncodedVideoChunk({type:sample.key?'key':'delta',timestamp:sample.timestamp,duration:sample.duration,data}));
    }
    if(s.index===s.track.samples.length&&!s.flushed&&g===generation&&!closed&&!failed){s.flushed=true;await s.decoder.flush();if(g===generation)s.done=true;}
@@ -30,8 +31,8 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
   const g=generation;
   try { for(const [trackIndex,track] of movie.tracks.entries()){
    let index=0;for(let i=0;i<track.samples.length;i++){if(track.samples[i].timestamp/1e6>target)break;if(track.samples[i].key)index=i;}
-   const s={track,index,pending:0,frames:[],reading:false,flushed:false,done:false,submitted:0,decoded:0,maxInFlight:0};
-   s.decoder=new VideoDecoder({output(frame){if(g!==generation||closed||failed){frame.close();return;}s.pending=Math.max(0,s.pending-1);s.decoded++;if((frame.timestamp+(frame.duration||33367))/1e6<=target){frame.close();}else{s.frames.push(frame);}pump(s,g);},error(error){if(g===generation)fail(error);}});
+   const s={track,trackIndex,index,pending:0,frames:[],reading:false,flushed:false,done:false,submitted:0,decoded:0,maxInFlight:0,submittedAt:new Map(),decodeMilliseconds:0,maxDecodeMilliseconds:0};
+   s.decoder=new VideoDecoder({output(frame){if(g!==generation||closed||failed){frame.close();return;}s.pending=Math.max(0,s.pending-1);s.decoded++;const submittedAt=s.submittedAt.get(frame.timestamp);if(submittedAt!==undefined){const elapsed=performance.now()-submittedAt;s.decodeMilliseconds+=elapsed;s.maxDecodeMilliseconds=Math.max(s.maxDecodeMilliseconds,elapsed);s.submittedAt.delete(frame.timestamp);}if((frame.timestamp+(frame.duration||33367))/1e6<=target){frame.close();}else{s.frames.push(frame);}pump(s,g);},error(error){if(g===generation)fail(error);}});
    streams.push(s);s.decoder.configure(configs[trackIndex]);
    s.decoder.ondequeue=()=>pump(s,g);
   }} catch(error){fail(error);throw error;}
@@ -40,6 +41,7 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
  function setBuffering(value){if(buffering===value)return;buffering=value;if(value)stats.bufferingEvents++;notify();}
  function tick(now){
   if(closed)return;
+  if(playing&&lastTick!==null){stats.animationTicks++;stats.maxAnimationGapMilliseconds=Math.max(stats.maxAnimationGapMilliseconds,now-lastTick);}
   const elapsed=lastTick===null?0:Math.max(0,Math.min(.1,(now-lastTick)/1000));lastTick=now;
   if(!failed&&streams.length===2){
    const [a,b]=streams.map(s=>s.frames);
@@ -73,6 +75,6 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
  }
  try{seek(0);}catch(error){closed=true;dispose();throw error;}raf=requestAnimationFrame(tick);
  return {duration:movie.duration,get playing(){return playing;},play(){if(closed||failed)return;if(currentTime>=movie.duration)seek(0);mediaClock=Math.max(target,currentTime);lastTick=null;playing=true;setBuffering(true);notify();},pause(){playing=false;buffering=false;target=currentTime;mediaClock=currentTime;lastTick=null;notify();},seek,
- getDiagnostics(){return {version:2,limits:{outputFrames:OUTPUT_BUFFER,inFlight:MAX_IN_FLIGHT,decodeQueue:DECODE_QUEUE,startFrames:START_BUFFER},state:{playing,buffering,failed,currentTime,mediaClock,duration:movie.duration},counters:{...stats},tracks:streams.map(s=>({codec:s.track.config.codec,width:s.track.config.codedWidth,height:s.track.config.codedHeight,hardwareAcceleration:'prefer-hardware',submitted:s.submitted,decoded:s.decoded,pending:s.pending,queued:s.decoder.decodeQueueSize||0,bufferedFrames:s.frames.length,maxInFlight:s.maxInFlight,done:s.done}))};},
- close(){closed=true;generation++;cancelAnimationFrame(raf);dispose();shown.forEach(f=>f.close());shown=[];}};
+ getDiagnostics(){return {version:3,input:movie.getReadDiagnostics(),limits:{outputFrames:OUTPUT_BUFFER,inFlight:MAX_IN_FLIGHT,decodeQueue:DECODE_QUEUE,startFrames:START_BUFFER},state:{playing,buffering,failed,currentTime,mediaClock,duration:movie.duration},counters:{...stats},tracks:streams.map(s=>({codec:s.track.config.codec,width:s.track.config.codedWidth,height:s.track.config.codedHeight,hardwareAcceleration:'prefer-hardware',submitted:s.submitted,decoded:s.decoded,pending:s.pending,queued:s.decoder.decodeQueueSize||0,bufferedFrames:s.frames.length,maxInFlight:s.maxInFlight,decodeMilliseconds:s.decodeMilliseconds,maxDecodeMilliseconds:s.maxDecodeMilliseconds,done:s.done}))};},
+ close(){closed=true;generation++;cancelAnimationFrame(raf);dispose();movie.close();shown.forEach(f=>f.close());shown=[];}};
 }
