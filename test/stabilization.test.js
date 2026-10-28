@@ -62,3 +62,26 @@ test('a canceled input read does not permanently disable stabilization after see
  const s=await createMaxStabilization(file,frames(2),async p=>{if(first){first=false;throw new DOMException('Seek canceled','AbortError');}return new Uint8Array(await file.slice(p.offset,p.offset+p.size).arrayBuffer());});
  assert.equal(await s.prepare(0),null);assert.equal(s.getDiagnostics().enabled,true);near(await s.prepare(40000),axis(1,-.2),.0001);s.close();
 });
+
+test('seek during initial telemetry read cannot inherit an obsolete promise or delete its replacement',async()=>{
+ const file=fixture([packet([axis(0,.1),axis(0,.3)])]),requests=[];
+ const s=await createMaxStabilization(file,frames(2),sample=>new Promise(resolve=>requests.push(async()=>resolve(new Uint8Array(await file.slice(sample.offset,sample.offset+sample.size).arrayBuffer())))));
+ const stale=s.prepare(0);assert.equal(requests.length,1);s.reset();const current=s.prepare(40000);assert.equal(requests.length,2);
+ await requests[0]();assert.equal(await stale,null);assert.equal(s.getDiagnostics().pendingPackets,1);assert.equal(s.getDiagnostics().cachedPackets,0);
+ await requests[1]();near(await current,axis(0,.2),.0001);assert.equal(s.getDiagnostics().enabled,true);assert.equal(s.getDiagnostics().packetsRead,1);s.close();
+});
+
+test('seek during a later telemetry read keeps the first-frame reference and rejects stale cache writes',async()=>{
+ const file=fixture([.1,.2,.3].map((a,i)=>packet([axis(0,a)],undefined,i+1)),{delta:40}),requests=[];
+ const s=await createMaxStabilization(file,frames(3),(sample,index)=>new Promise(resolve=>requests.push({index,finish:async()=>resolve(new Uint8Array(await file.slice(sample.offset,sample.offset+sample.size).arrayBuffer()))})));
+ const first=s.prepare(0);await requests[0].finish();near(await first,identity);
+ const stale=s.prepare(40000);s.reset();const current=s.prepare(80000);
+ assert.deepEqual(requests.map(r=>r.index),[0,1,2]);await requests[1].finish();assert.equal(await stale,null);assert.equal(s.getDiagnostics().pendingPackets,1);
+ await requests[2].finish();near(await current,axis(0,.2),.0001);assert.equal(s.getDiagnostics().cachedPackets,2);assert.equal(s.getDiagnostics().enabled,true);s.close();
+});
+
+test('concurrent preparations serialize distinct packets for the dedicated shared-input consumer',async()=>{
+ const file=fixture([0,.1,.2].map((a,i)=>packet([axis(0,a)],undefined,i+1)),{delta:40});let active=0,maxActive=0;
+ const s=await createMaxStabilization(file,frames(3),async sample=>{active++;maxActive=Math.max(maxActive,active);await new Promise(resolve=>setImmediate(resolve));const bytes=new Uint8Array(await file.slice(sample.offset,sample.offset+sample.size).arrayBuffer());active--;return bytes;});
+ await s.prepare(0);const [a,b]=await Promise.all([s.prepare(40000),s.prepare(80000)]);near(a,axis(0,.1),.0001);near(b,axis(0,.2),.0001);assert.equal(maxActive,1);assert.equal(s.getDiagnostics().pendingPackets,0);s.close();
+});

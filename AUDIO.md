@@ -20,8 +20,8 @@ The active desktop or immersive-XR render loop advances native playback; it does
 
 - Audio reads reuse the same shared small-file buffer / 64 MiB chunk cache as video. The existing **256 MiB cached-plus-in-flight compressed-input ceiling** remains in place; the budget is not a total process-memory bound.
 - Compressed AAC has at most 24 outstanding decoder inputs. Decoded audio plus pending inputs is bounded; the scheduler retains about one second of decoded media, not the whole recording. PCM packets are grouped to at most 4096 frames each, avoiding per-frame objects for a long PCM track.
-- Shared-cache demand eviction can replace an inactive old-current audio region; active sample reads remain protected. At most two physical chunk reads run simultaneously. Telemetry uses its own small bounded exact-read cache.
-- Playback diagnostics v6 includes only technical audio mode, format, clock, scheduling, queue and failure-status counters. No audio samples, footage, filenames, paths, raw metadata or automatic uploads.
+- Shared-cache demand eviction can replace an inactive old-current audio region; active sample reads remain protected. At most two physical chunk reads run simultaneously. Telemetry is a dedicated consumer of the same shared input cache, with a separate bounded parsed-orientation cache.
+- Playback diagnostics v7 includes only technical audio mode, format, clock, scheduling, queue and failure-status counters. No audio samples, footage, filenames, paths, raw metadata or automatic uploads.
 
 ## Evidence and remaining gates
 

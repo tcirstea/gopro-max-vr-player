@@ -13,9 +13,9 @@ The same final camera-to-source matrix is exposed to the local ambisonic listene
 
 ## Bounds and lifecycle
 
-Only orientation fields are retained; GPS and other camera identifiers are not returned or included in playback diagnostics. GPMF reads are local and lazy, with a 1 MiB packet ceiling, at most two pending reads, and four cached parsed packets. These small metadata reads are separate from the shared compressed video/audio cache. No whole-recording telemetry scan is needed at startup.
+Only orientation fields are retained; GPS and other camera identifiers are not returned or included in playback diagnostics. GPMF reads are local and lazy, with a 1 MiB packet ceiling, one current packet read, and four cached parsed packets. Native playback gives telemetry its own input consumer and sample-table lookahead within the same prepared small-file buffer / bounded 256 MiB video/audio chunk cache. Cached telemetry no longer makes a separate physical Blob read at each packet boundary. The standalone verification helper retains exact packet reads. No whole-recording telemetry scan is needed at startup.
 
-Malformed, absent, unsupported, or non-frame-aligned telemetry disables this correction and records a technical reason rather than breaking video playback. Nonzero metadata edit offsets are unsupported. Seek uses the original first-frame reference, not a new reference, avoiding a view reset on every seek. Canceled input reads can be retried. Close prevents late input from repopulating the cache.
+Malformed, absent, unsupported, or non-frame-aligned telemetry disables this correction and records a technical reason rather than breaking video playback. Nonzero metadata edit offsets are unsupported. Seek uses the original first-frame reference, not a new reference, avoiding a view reset on every seek. Seeking cancels pending preparation generations along with shared input consumers while retaining valid parsed packets and the original first-frame reference. Stale completions cannot repopulate caches, remove a newer request, or disable current stabilization. Close prevents late input from repopulating the cache.
 
 ## Verification and limits
 
@@ -23,4 +23,6 @@ Orientation validation can compare decoded EAC scene regions across candidate qu
 
 The optional `node scripts/verify-stabilization.mjs /private/path/to/clip.360` check reads a local recording and prints technical coverage/cache counters, not filenames or raw telemetry. It does not decode video.
 
-Synthetic tests cover GPMF bounds/scaling, noncommuting CORI/IORI composition, quaternion math, frame-ordinal timing, padded final packets, chapter-counter baselines, lazy caching, repeated seeks, cancellation, missing metadata, and close during pending reads. Real nonidentity IORI, other capture modes/firmware, GPU shader execution, and headset stabilization still need target-device verification. The local Chromium smoke test could not launch in the execution environment; unit and CPU image checks do not substitute for real browser/headset playback.
+Diagnostics v7 identifies the shared-input strategy and measures telemetry preparation read latency without including raw metadata.
+
+Synthetic tests cover cached packet-boundary playback, concurrent audio/video/telemetry cache contention, pending-read seek storms, GPMF bounds/scaling, noncommuting CORI/IORI composition, quaternion math, frame-ordinal timing, padded final packets, chapter-counter baselines, lazy caching, repeated seeks, cancellation, missing metadata, and close during pending reads. Real nonidentity IORI, other capture modes/firmware, GPU shader execution, and headset stabilization still need target-device verification. The local Chromium smoke test could not launch in the execution environment; unit and CPU image checks do not substitute for real browser/headset playback.

@@ -206,3 +206,15 @@ test('declared audio consumers share bounds and cannot deadlock on distant cross
   assert.deepEqual(await input.read(tracks[3].samples[0],3,0),bytes(tracks[3].samples[0].offset,8));bounded(input);
  }finally{input.close();}
 });
+
+test('telemetry, selected audio and paired video share four slots even across distant chunk boundaries',{timeout:3000},async()=>{
+ const file=source(4096),tracks=Array.from({length:5},(_,track)=>({samples:Array.from({length:12},(_,i)=>({offset:track*768+i*32+13,size:8}))}));
+ const input=createChunkedInput(file,{chunkBytes:16,tracks});
+ try{
+  for(let i=0;i<12;i++){
+   const consumers=[0,1,i<6?2:3,4];
+   const data=await Promise.all(consumers.map(track=>input.read(tracks[track].samples[i],track,i)));
+   data.forEach((value,n)=>assert.deepEqual(value,bytes(tracks[consumers[n]].samples[i].offset,8)));bounded(input);
+  }
+ }finally{input.close();}
+});

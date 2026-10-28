@@ -40,44 +40,52 @@ export function telemetrySamples(v,fileSize){
  if(candidates.length>1)throw new Error('Multiple GPMF tracks are unsupported.');return candidates[0]||null;
 }
 function indexAt(samples,timestamp){let lo=0,hi=samples.length;while(lo<hi){const mid=(lo+hi)>>1;if(samples[mid].timestamp<=timestamp)lo=mid+1;else hi=mid;}return Math.max(0,lo-1);}
-export async function createMaxStabilization(file,videoSamples,readSample=async sample=>new Uint8Array(await file.slice(sample.offset,sample.offset+sample.size).arrayBuffer())){
- let closed=false,enabled=true,status='ready',reason=null,packets=null,base=null,reference=null,initial=null;
- const cache=new Map(),pending=new Map(),stats={packetsRead:0,bytesRead:0,preparedFrames:0,nonIdentityImageSamples:0};
+export async function createMaxStabilization(file,videoSamples,readSample=async sample=>new Uint8Array(await file.slice(sample.offset,sample.offset+sample.size).arrayBuffer()),metadata){
+ let closed=false,enabled=true,status='ready',reason=null,packets=null,base=null,reference=null,initial=null,generation=0;
+ const cache=new Map(),pending=new Map(),stats={packetsRead:0,bytesRead:0,readMilliseconds:0,maxReadMilliseconds:0,preparedFrames:0,nonIdentityImageSamples:0};
  const disable=error=>{enabled=false;status='unavailable';reason=error.message;cache.clear();};
- try{packets=telemetrySamples((await readMovie(file)).moov,file.size);if(!packets){status='absent';enabled=false;}if(!videoSamples?.length)throw new Error('No video frame timeline.');}catch(error){disable(error);}
- async function packet(index){
-  if(closed)throw new Error('Stabilization is closed.');
+ const check=g=>{if(closed||g!==generation)throw new DOMException('Stabilization preparation was canceled.','AbortError');};
+ try{if(metadata?.error)throw metadata.error;packets=metadata?metadata.samples:telemetrySamples((await readMovie(file)).moov,file.size);if(!packets){status='absent';enabled=false;}if(!videoSamples?.length)throw new Error('No video frame timeline.');}catch(error){disable(error);}
+ async function packet(index,g){
+  check(g);
   if(cache.has(index)){const value=cache.get(index);cache.delete(index);cache.set(index,value);return value;}
   if(pending.has(index))return pending.get(index);
-  while(pending.size>=2){await Promise.race(pending.values());if(closed)throw new Error('Stabilization is closed.');if(pending.has(index))return pending.get(index);if(cache.has(index))return cache.get(index);}
+  // A dedicated shared-input consumer permits one active sample read. Same
+  // packet calls deduplicate; different packets serialize without aliasing video.
+  while(pending.size){await Promise.race(pending.values());check(g);if(pending.has(index))return pending.get(index);if(cache.has(index))return cache.get(index);}
   const job=(async()=>{
-   const bytes=await readSample(packets[index]);if(closed)throw new Error('Stabilization is closed.');if(bytes.byteLength!==packets[index].size)throw new Error('Truncated GPMF packet.');
+   const readStart=performance.now(),bytes=await readSample(packets[index],index);check(g);const elapsed=performance.now()-readStart;stats.readMilliseconds+=elapsed;stats.maxReadMilliseconds=Math.max(stats.maxReadMilliseconds,elapsed);if(bytes.byteLength!==packets[index].size)throw new Error('Truncated GPMF packet.');
    const streams=parseGpmfOrientation(bytes),c=streams.filter(s=>s.key==='CORI'),i=streams.filter(s=>s.key==='IORI');
    if(c.length!==1||i.length!==1||c[0].total!==i[0].total||c[0].values.length!==i[0].values.length)throw new Error('Matching CORI and IORI streams are required.');
    const cori=c[0],iori=i[0],start=cori.total-cori.values.length;
    const value={start,count:cori.values.length,quaternions:cori.values.map((q,n)=>maxSamplingQuaternion(q,iori.values[n]))};
    stats.packetsRead++;stats.bytesRead+=bytes.byteLength;stats.nonIdentityImageSamples+=iori.values.filter(q=>Math.hypot(...q.slice(1))>1e-4).length;
    if(!closed&&enabled){cache.set(index,value);while(cache.size>CACHE_PACKETS)cache.delete(cache.keys().next().value);}return value;
-  })();pending.set(index,job);try{return await job;}finally{pending.delete(index);}
+  })();pending.set(index,job);try{return await job;}finally{if(pending.get(index)===job)pending.delete(index);}
  }
  async function prepare(timestamp){
   if(closed||!enabled)return null;
+  const g=generation;
   try{
-   initial??=packet(0).then(first=>{base=first.start;reference=conjugateQuaternion(first.quaternions[0]);}).catch(error=>{initial=null;throw error;});await initial;
-   if(closed||!enabled)return null;
+   if(!reference){
+    if(!initial){const job=packet(0,g).then(first=>{check(g);base=first.start;reference=conjugateQuaternion(first.quaternions[0]);});initial=job;job.catch(()=>{if(initial===job)initial=null;});}
+    await initial;
+   }
+   check(g);if(!enabled)return null;
    const frame=indexAt(videoSamples,timestamp);let guess=indexAt(packets,videoSamples[frame].timestamp),found=null;
    // MP4 packet time selects a nearby payload; TSMP gives the authoritative
    // encoded-frame ordinal. Never stretch the last packet or add STMP latency.
    for(let n=0;n<8;n++){
-    const current=await packet(guess),start=current.start-base,end=start+current.count;
+    const current=await packet(guess,g);check(g);const start=current.start-base,end=start+current.count;
     if(start<0||end>videoSamples.length+2)throw new Error('Unsupported GPMF frame counters.');
     if(frame>=start&&frame<end){found=current.quaternions[frame-start];break;}
     guess+=frame<start?-1:1;if(guess<0||guess>=packets.length)break;
    }
    if(!found)throw new Error('GPMF orientation does not cover this video frame.');
-   if(closed||!enabled)return null;stats.preparedFrames++;
+   check(g);if(!enabled)return null;stats.preparedFrames++;
    return normalizeQuaternion(multiplyQuaternion(found,reference));
-  }catch(error){if(!closed&&error.name!=='AbortError')disable(error);return null;}
+  }catch(error){if(!closed&&g===generation&&error.name!=='AbortError')disable(error);return null;}
  }
- return {prepare,getDiagnostics(){return {status,enabled:enabled&&!closed,reason,...stats,cachedPackets:cache.size,pendingPackets:pending.size,cacheLimitPackets:CACHE_PACKETS,frameAlignment:'encoded-frame-ordinal',horizonLeveling:false};},close(){closed=true;cache.clear();reference=IDENTITY_QUATERNION;}};
+ function reset(){generation++;pending.clear();initial=null;}
+ return {prepare,reset,getDiagnostics(){return {status,enabled:enabled&&!closed,reason,...stats,inputStrategy:metadata?'shared-movie-input':'exact-packet',cachedPackets:cache.size,pendingPackets:pending.size,cacheLimitPackets:CACHE_PACKETS,frameAlignment:'encoded-frame-ordinal',horizonLeveling:false};},close(){closed=true;reset();cache.clear();reference=IDENTITY_QUATERNION;}};
 }

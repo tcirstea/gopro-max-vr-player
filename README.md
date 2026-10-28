@@ -77,7 +77,7 @@ The large-file reader reserves at most **256 MiB** across cached chunks **and re
 
 Startup deliberately waits for the first 64 MiB chunk. On slower storage that can take several seconds; the next chunk is read ahead rather than waiting for a playback miss. Prefetch cannot overcome storage slower than the sustained video bitrate, insufficient HEVC decode throughput, or a GPU bottleneck. Small-file preparation, decode/frame limits, projection, and zoom are unchanged. Everything stays in local memory: no upload or persistent browser copy.
 
-Diagnostics **v6** reports the strategy, shared physical read/prefetch/cache counters, sample-copy bytes, current/peak reserved compressed bytes, concurrent reads, canceled consumers and discarded reads, plus decoder-output latency and animation-frame gaps. Audio scheduling/clock counters and stabilization status are also included. Shared reads are counted only once. GPU upload timings do not measure asynchronous GPU draw completion.
+Diagnostics **v7** reports the strategy, shared physical read/prefetch/cache counters, sample-copy bytes, current/peak reserved compressed bytes, concurrent reads, canceled consumers and discarded reads, plus decoder-output latency and animation-frame gaps. Audio scheduling/clock counters and stabilization status/read latency are also included. Native telemetry now uses the same shared input cache instead of issuing a separate physical read at every packet boundary. Shared reads are counted only once. GPU upload timings do not measure asynchronous GPU draw completion.
 
 ### Reproducible input benchmark
 

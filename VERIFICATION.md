@@ -2,7 +2,7 @@
 
 ## Passed
 
-- `npm test`: **103/103 tests**, Node 24.22.1 (final combined audio/stabilization review).
+- `npm test`: **111/111 tests**, Node 24.22.1 (shared telemetry input correction).
 - `node --check` for every `src/*.js` module; `git diff --check`.
 - Metadata/parser tests: single/dual tracks, native detection, codecs/dimensions, media-payload skipping, malformed/truncated/extended/zero-sized boxes, metadata limits and safe time formatting.
 - Native tests: sample offsets/timestamps, codec configuration strings, invalid offsets/dimensions/reordered timestamps, **mocked** paired decode, duration/seek behavior, frame cleanup, unsupported-codec and partial-configuration failure, separate decode-request/output backpressure and 24-sample hard outstanding cap.
@@ -79,3 +79,12 @@ Native AAC stereo, metadata-gated ambisonic headphone rendering, and GPMF relati
 - GPMF tests cover bounded parsing, scaling, frame ordinals rather than padded packet timing, noncommuting CORI/IORI composition, stable first-frame reference, lazy caching, cancellation and malformed/absent metadata. Renderer tests check matching view/stabilization matrices for image sampling and the audio listener.
 - Final aggregate: **103/103 tests pass**, all source syntax checks pass, and `git diff --check` passes. These are synthetic/mocked software checks. Actual HEVC/AAC WebCodecs execution, GPU pixels, sustained playback, acoustic A/V alignment, headphone localization and physical-headset behavior remain unverified on a supported target browser/device. The historical browser-launch/network blockers above are not passing browser checks.
 - Private sample-derived measurements are deliberately excluded from published documentation. Generic methodology and reproducible synthetic evidence are retained in this file, AUDIO.md and STABILIZATION.md.
+
+
+## Shared telemetry input correction — 2026-10-28
+
+- Native stabilization previously awaited an exact Blob read at each GPMF packet boundary before submitting track-0 video. Those waits bypassed the shared compressed-input cache and were not included in decoder-output latency. Telemetry now has a dedicated declared consumer and sample-table lookahead in the same bounded input as video/audio; already-parsed movie metadata is reused. Neither stabilization nor audio is disabled, and output/decode/cache limits, projection and zoom are unchanged.
+- Two synthetic integration regressions deliberately delay the second exact telemetry read while the video bytes are cached. Before the correction, both small-file and large-chunk paths stopped at 0.96 seconds. With the correction, both present through the final 3.96-second frame of the four-second fixture, issue one physical input read and zero separate telemetry reads, and buffer only at startup. This establishes the software failure mechanism, not actual device smoothness.
+- Added combined audio/video/telemetry consumer and distant-boundary contention checks; rapid seeks while physical reads are held remain within the 256 MiB/two-read limits. Added initial/later telemetry-read cancellation, stale-completion protection, preserved first-frame reference, and serialized concurrent packet preparation checks.
+- Diagnostics v7 adds the telemetry input strategy and read-latency counters. Only synthetic fixtures and general evidence are included here; private diagnostics and media are not published.
+- Final aggregate: **111/111 tests pass**, every source module passes `node --check`, and `git diff --check` passes. Actual target-browser HEVC/GPU/audio playback and device-specific smoothness remain unverified by these mocked tests.

@@ -31,7 +31,7 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
   }catch(error){if(g===generation)fail(error);}finally{s.reading=false;}})();
  }
  function seek(seconds){
-  if(closed||failed)return;playRequest++;generation++;dispose();orientations.clear();movie.reset();stats.seeks++;target=Math.max(0,Math.min(movie.duration-0.000001,Number(seconds)||0));currentTime=mediaClock=target;lastTick=null;buffering=playing;shownEnd=target;audio?.seek(target);
+  if(closed||failed)return;playRequest++;generation++;dispose();orientations.clear();movie.reset();stabilization?.reset();stats.seeks++;target=Math.max(0,Math.min(movie.duration-0.000001,Number(seconds)||0));currentTime=mediaClock=target;lastTick=null;buffering=playing;shownEnd=target;audio?.seek(target);
   shown.forEach(f=>f.close());shown=[];
   const g=generation;
   try { for(const [trackIndex,track] of movie.tracks.entries()){
@@ -84,7 +84,7 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
   }
   if(autoTick)raf=requestAnimationFrame(tick);
  }
- stabilization=await createMaxStabilization(file,movie.tracks[0].samples);
+ stabilization=await createMaxStabilization(file,movie.tracks[0].samples,(sample,index)=>movie.read(sample,movie.telemetry.inputIndex,index),movie.telemetry);
  audio=await createNativeAudio(movie,{onChange:notify});
  try{seek(0);}catch(error){closed=true;dispose();audio?.close();stabilization?.close();movie.close();throw error;}if(autoTick)raf=requestAnimationFrame(tick);
  // The renderer can drive this from its active window/XR loop instead.
@@ -95,6 +95,6 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
   const request=++playRequest;return audio.unlock().then(()=>{if(request===playRequest&&!closed&&!failed)begin();});
  },pause(){playRequest++;if(audio.available&&!buffering)mediaClock=audio.clock();playing=false;buffering=false;target=currentTime=mediaClock;audio.pause(mediaClock);lastTick=null;notify();},seek,
  setMuted(value){audio.setMuted(value);},setViewRotation(value){audio.setViewRotation(value);},setAudioMode(mode){if(audio.select(mode,mediaClock))seek(mediaClock);},
- getDiagnostics(){return {version:6,audio:audio.getDiagnostics(),stabilization:stabilization.getDiagnostics(),inputState:movie.getInputState(),input:movie.getReadDiagnostics(),limits:{outputFrames:OUTPUT_BUFFER,inFlight:MAX_IN_FLIGHT,decodeQueue:DECODE_QUEUE,startFrames:START_BUFFER},state:{playing,buffering,failed,currentTime,mediaClock,duration:movie.duration},counters:{...stats},tracks:streams.map(s=>({codec:s.track.config.codec,width:s.track.config.codedWidth,height:s.track.config.codedHeight,hardwareAcceleration:'prefer-hardware',submitted:s.submitted,decoded:s.decoded,pending:s.pending,queued:s.decoder.decodeQueueSize||0,bufferedFrames:s.frames.length,maxInFlight:s.maxInFlight,decodeMilliseconds:s.decodeMilliseconds,maxDecodeMilliseconds:s.maxDecodeMilliseconds,done:s.done}))};},
+ getDiagnostics(){return {version:7,audio:audio.getDiagnostics(),stabilization:stabilization.getDiagnostics(),inputState:movie.getInputState(),input:movie.getReadDiagnostics(),limits:{outputFrames:OUTPUT_BUFFER,inFlight:MAX_IN_FLIGHT,decodeQueue:DECODE_QUEUE,startFrames:START_BUFFER},state:{playing,buffering,failed,currentTime,mediaClock,duration:movie.duration},counters:{...stats},tracks:streams.map(s=>({codec:s.track.config.codec,width:s.track.config.codedWidth,height:s.track.config.codedHeight,hardwareAcceleration:'prefer-hardware',submitted:s.submitted,decoded:s.decoded,pending:s.pending,queued:s.decoder.decodeQueueSize||0,bufferedFrames:s.frames.length,maxInFlight:s.maxInFlight,decodeMilliseconds:s.decodeMilliseconds,maxDecodeMilliseconds:s.maxDecodeMilliseconds,done:s.done}))};},
  close(){closed=true;playRequest++;generation++;audio?.close();stabilization?.close();orientations.clear();cancelAnimationFrame(raf);dispose();movie.close();shown.forEach(f=>f.close());shown=[];}};
 }
