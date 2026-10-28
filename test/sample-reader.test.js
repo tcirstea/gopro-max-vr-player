@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createSampleReader,READ_AHEAD_BYTES} from '../src/native-demux.js';
+import {createSampleReader,READ_AHEAD_BYTES,createMovieInput,SMALL_FILE_PRELOAD_BYTES} from '../src/native-demux.js';
 
 function source(size=128){
  const bytes=Uint8Array.from({length:size},(_,i)=>i%251),reads=[];
@@ -49,4 +49,41 @@ test('clearing while a read is in flight prevents cache retention after player c
  const reader=createSampleReader({...file,slice(start,end){return {arrayBuffer:()=>new Promise(resolve=>finish=()=>resolve(file.bytes.slice(start,end).buffer))};}},8);
  const read=reader.read({offset:0,size:4});reader.clear();finish();
  assert.deepEqual(await read,file.bytes.slice(0,4));assert.equal(reader.getDiagnostics().cachedBytes,0);
+});
+
+test('small-file preparation shares one local read and backing buffer across tracks and seeks',async()=>{
+ const file=source(),input=createMovieInput(file);
+ assert.equal(file.reads.length,0,'no eager payload read before decoder support is checked');
+ assert.equal(input.getInputState().preparing,true);
+ const [a,b]=await Promise.all([input.read({offset:8,size:4},0),input.read({offset:80,size:4},1)]);
+ assert.deepEqual(a,file.bytes.slice(8,12));assert.deepEqual(b,file.bytes.slice(80,84));assert.equal(a.buffer,b.buffer);
+ assert.deepEqual(await input.read({offset:0,size:4},1),file.bytes.slice(0,4));
+ assert.deepEqual(file.reads,[[0,128]]);assert.equal(input.getReadDiagnostics().length,1);
+ assert.equal(input.getInputState().preparing,false);input.close();assert.equal(input.getReadDiagnostics()[0].cachedBytes,0);
+ await assert.rejects(input.read({offset:0,size:4}),/closed/);
+});
+test('preload ceiling is inclusive; larger files retain bounded per-track streaming',async()=>{
+ const calls=[];
+ const atLimit=createMovieInput({size:SMALL_FILE_PRELOAD_BYTES,slice(){assert.fail('Constructing input must not read');}});
+ assert.equal(atLimit.getInputState().strategy,'preload-small-file');atLimit.close();
+ const input=createMovieInput({size:SMALL_FILE_PRELOAD_BYTES+1,slice(start,end){calls.push([start,end]);return new Blob([new Uint8Array(end-start)]);}});
+ assert.equal(input.getInputState().strategy,'streamed-windows');
+ await Promise.all([input.read({offset:0,size:1},0),input.read({offset:READ_AHEAD_BYTES*2,size:1},1)]);
+ assert.deepEqual(calls,[[0,READ_AHEAD_BYTES],[READ_AHEAD_BYTES*2,READ_AHEAD_BYTES*3]]);
+ assert.equal(input.getReadDiagnostics().reduce((n,s)=>n+s.cachedBytes,0),READ_AHEAD_BYTES*2);input.close();
+});
+test('truncated and rejected shared preparation fail both consumers without retry storms',async()=>{
+ for(const fails of [false,true]){
+  let reads=0;
+  const input=createMovieInput({size:32,slice(){reads++;return {async arrayBuffer(){if(fails)throw new Error('Local read failed');return new ArrayBuffer(4);}};}});
+  const results=await Promise.allSettled([input.read({offset:0,size:1},0),input.read({offset:8,size:1},1)]);
+  assert.ok(results.every(r=>r.status==='rejected'));assert.equal(reads,1);assert.equal(input.getReadDiagnostics()[0].cachedBytes,0);input.close();
+ }
+});
+test('closing a pending shared preparation prevents decoder input and cache retention',async()=>{
+ let finish,reads=0;
+ const input=createMovieInput({size:32,slice(){reads++;return {arrayBuffer:()=>new Promise(resolve=>finish=()=>resolve(new ArrayBuffer(32)))};}});
+ const pending=[input.read({offset:0,size:1},0),input.read({offset:8,size:1},1)];
+ input.close();finish();const results=await Promise.allSettled(pending);
+ assert.ok(results.every(r=>r.status==='rejected'));assert.equal(reads,1);assert.equal(input.getReadDiagnostics()[0].cachedBytes,0);assert.equal(input.getInputState().preparing,false);
 });

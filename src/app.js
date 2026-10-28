@@ -18,7 +18,7 @@ async function openFile(file){
   status('Native dual-track candidate detected. Checking HEVC decoders and loading paired frames locally…');
   const player=await createNativePlayer(file,{
    onFrames(a,b){if(current!==generation)return;renderer.setMaxSources(a,b);$('source').textContent='LOCAL MAX · EXPERIMENTAL EAC';$('view-title').textContent='Your point of view';},
-   onState(state){if(current!==generation)return;playbackStatus(state.buffering?'Buffering paired video frames… Playback time is held until frames are ready.':state.playing?'Playing locally · Native audio unavailable.':'');$('play').textContent=state.playing?'Pause':'Play';$('time').textContent=`${formatTime(state.currentTime)} / ${formatTime(state.duration)}`;$('seek').value=state.currentTime/state.duration*1000;},
+   onState(state){if(current!==generation)return;playbackStatus(state.preparing?'Preparing this short clip in local memory…':state.buffering?'Buffering paired video frames… Playback time is held until frames are ready.':state.playing?'Playing locally · Native audio unavailable.':'');$('play').textContent=state.playing?'Pause':'Play';$('time').textContent=`${formatTime(state.currentTime)} / ${formatTime(state.duration)}`;$('seek').value=state.currentTime/state.duration*1000;},
    onError(error){if(current===generation){playbackStatus('');$('play').disabled=true;$('seek').disabled=true;status(`Native decoder stopped: ${error.message}`);}}
   });
   if(current!==generation){player.close();return;}nativePlayer=player;$('diagnostics-panel').hidden=false;$('play').disabled=false;$('seek').disabled=false;$('muted').checked=true;video.muted=true;$('muted').disabled=true;

@@ -88,8 +88,19 @@ test('batched decode drains to actual final pair, then replay starts from zero',
   for(let now=0;now<7000&&p.playing;now+=40){decoders.slice(0,2).forEach(d=>d.emit(4));await settle();tick(now);}
   assert.equal(p.playing,false);assert.equal(p.getDiagnostics().state.currentTime,4);
   assert.equal(presented.at(-1),3960000);
+  tick(7500);assert.equal(p.getDiagnostics().state.mediaClock,4,'EOF remains at the end on later paused ticks');
   p.play();assert.equal(p.playing,true);assert.equal(p.getDiagnostics().state.mediaClock,0);
   await settle();decoders.slice(2).forEach(d=>d.emit(4));await settle();tick(8000);
   assert.equal(presented.at(-1),0);
+ });
+});
+
+test('decoder failure releases input and cannot be revived by seek or play',async()=>{
+ await delayedHarness(async({p,decoders})=>{
+  p.play();decoders[0].opts.error(new Error('Decode failed'));
+  const before=p.getDiagnostics();assert.equal(before.state.failed,true);assert.equal(before.state.playing,false);
+  assert.ok(before.input.every(i=>i.cachedBytes===0));
+  p.seek(1);p.play();assert.equal(p.getDiagnostics().state.failed,true);assert.equal(p.playing,false);
+  assert.equal(p.getDiagnostics().counters.seeks,before.counters.seeks);assert.equal(decoders.length,2);
  });
 });

@@ -6,12 +6,12 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
  if(!globalThis.isSecureContext||!globalThis.VideoDecoder)throw new Error('Native MAX playback needs WebCodecs in a secure context (HTTPS or localhost).');
  const movie=await demuxNative(file);
  const configs=movie.tracks.map(t=>({...t.config,hardwareAcceleration:'prefer-hardware',optimizeForLatency:true}));
- for(const config of configs){const result=await VideoDecoder.isConfigSupported(config);if(!result.supported)throw new Error(`This device cannot decode ${config.codec} at ${config.codedWidth} × ${config.codedHeight} through WebCodecs. Try a browser/OS with hardware HEVC support.`);}
+ try{for(const config of configs){const result=await VideoDecoder.isConfigSupported(config);if(!result.supported)throw new Error(`This device cannot decode ${config.codec} at ${config.codedWidth} × ${config.codedHeight} through WebCodecs. Try a browser/OS with hardware HEVC support.`);}}catch(error){movie.close();throw error;}
  let generation=0,closed=false,playing=false,buffering=false,currentTime=0,target=0,mediaClock=0,lastTick=null,streams=[],shown=[],shownEnd=0,raf=0,failed=false;
  const stats={presentedPairs:0,droppedPairs:0,unpairedFrames:0,bufferingEvents:0,seeks:0,uploadMilliseconds:0,maxUploadMilliseconds:0,animationTicks:0,maxAnimationGapMilliseconds:0};
- const notify=()=>onState({playing,buffering,currentTime,duration:movie.duration});
+ const notify=()=>onState({playing,buffering,preparing:movie.getInputState().preparing,currentTime,duration:movie.duration});
  const dispose=()=>{for(const s of streams){if(s.decoder.state!=='closed')s.decoder.close();s.frames.forEach(f=>f.close());}streams=[];};
- function fail(error){if(closed||failed)return;failed=true;playing=false;buffering=false;notify();onError(error);dispose();}
+ function fail(error){if(closed||failed)return;failed=true;playing=false;buffering=false;dispose();movie.close();notify();onError(error);}
  function pump(s,g){
   if(s.reading||closed||failed||g!==generation)return;
   s.reading=true;
@@ -26,7 +26,7 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
   }catch(error){if(g===generation)fail(error);}finally{s.reading=false;}})();
  }
  function seek(seconds){
-  if(closed)return;generation++;dispose();failed=false;stats.seeks++;target=Math.max(0,Math.min(movie.duration-0.000001,Number(seconds)||0));currentTime=mediaClock=target;lastTick=null;buffering=playing;shownEnd=target;
+  if(closed||failed)return;generation++;dispose();stats.seeks++;target=Math.max(0,Math.min(movie.duration-0.000001,Number(seconds)||0));currentTime=mediaClock=target;lastTick=null;buffering=playing;shownEnd=target;
   shown.forEach(f=>f.close());shown=[];
   const g=generation;
   try { for(const [trackIndex,track] of movie.tracks.entries()){
@@ -49,7 +49,7 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
    while(a.length&&b.length&&Math.abs(a[0].timestamp-b[0].timestamp)>2){(a[0].timestamp<b[0].timestamp?a:b).shift().close();stats.unpairedFrames++;}
    let resumed=false;
    if(playing&&buffering&&streams.every(s=>s.frames.length>=START_BUFFER||s.done)){setBuffering(false);resumed=true;}
-   let desired=playing?mediaClock+(buffering||resumed?0:elapsed):target;
+   let desired=playing?mediaClock+(buffering||resumed?0:elapsed):Math.max(target,currentTime);
    // Freeze at the end of available paired media, not the wall clock. A slow
    // decoder must never cause a seek-like rush through frames or a false EOF.
    const end=f=>(f.timestamp+(f.duration||33367))/1e6;
@@ -73,8 +73,8 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
   }
   raf=requestAnimationFrame(tick);
  }
- try{seek(0);}catch(error){closed=true;dispose();throw error;}raf=requestAnimationFrame(tick);
+ try{seek(0);}catch(error){closed=true;dispose();movie.close();throw error;}raf=requestAnimationFrame(tick);
  return {duration:movie.duration,get playing(){return playing;},play(){if(closed||failed)return;if(currentTime>=movie.duration)seek(0);mediaClock=Math.max(target,currentTime);lastTick=null;playing=true;setBuffering(true);notify();},pause(){playing=false;buffering=false;target=currentTime;mediaClock=currentTime;lastTick=null;notify();},seek,
- getDiagnostics(){return {version:3,input:movie.getReadDiagnostics(),limits:{outputFrames:OUTPUT_BUFFER,inFlight:MAX_IN_FLIGHT,decodeQueue:DECODE_QUEUE,startFrames:START_BUFFER},state:{playing,buffering,failed,currentTime,mediaClock,duration:movie.duration},counters:{...stats},tracks:streams.map(s=>({codec:s.track.config.codec,width:s.track.config.codedWidth,height:s.track.config.codedHeight,hardwareAcceleration:'prefer-hardware',submitted:s.submitted,decoded:s.decoded,pending:s.pending,queued:s.decoder.decodeQueueSize||0,bufferedFrames:s.frames.length,maxInFlight:s.maxInFlight,decodeMilliseconds:s.decodeMilliseconds,maxDecodeMilliseconds:s.maxDecodeMilliseconds,done:s.done}))};},
+ getDiagnostics(){return {version:4,inputState:movie.getInputState(),input:movie.getReadDiagnostics(),limits:{outputFrames:OUTPUT_BUFFER,inFlight:MAX_IN_FLIGHT,decodeQueue:DECODE_QUEUE,startFrames:START_BUFFER},state:{playing,buffering,failed,currentTime,mediaClock,duration:movie.duration},counters:{...stats},tracks:streams.map(s=>({codec:s.track.config.codec,width:s.track.config.codedWidth,height:s.track.config.codedHeight,hardwareAcceleration:'prefer-hardware',submitted:s.submitted,decoded:s.decoded,pending:s.pending,queued:s.decoder.decodeQueueSize||0,bufferedFrames:s.frames.length,maxInFlight:s.maxInFlight,decodeMilliseconds:s.decodeMilliseconds,maxDecodeMilliseconds:s.maxDecodeMilliseconds,done:s.done}))};},
  close(){closed=true;generation++;cancelAnimationFrame(raf);dispose();movie.close();shown.forEach(f=>f.close());shown=[];}};
 }

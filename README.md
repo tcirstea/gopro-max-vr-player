@@ -7,7 +7,7 @@ A static, local-first player targeting original **GoPro MAX** `.360` files witho
 ## Implemented
 
 - Local file selection; **no video uploads**, backend, runtime CDN or npm dependencies.
-- Bounded MP4 inspection and a dedicated sample-table demuxer that reads compressed samples lazily with bounded 4 MiB read-ahead per track rather than loading the entire recording.
+- Bounded MP4 inspection and a dedicated sample-table demuxer that prepares files up to 64 MiB once in shared local memory; larger recordings stream with bounded 4 MiB read-ahead per track.
 - Two WebCodecs HEVC decoders, actual-codec capability checks, timestamp pairing, bounded queues, seeking, play/pause and frame cleanup.
 - Original MAX EAC projection with second-track rotation and duplicated-overlap blending.
 - Experimental immersive WebXR with per-eye views and orientation-only panorama tracking; **not physically headset-tested**.
@@ -41,7 +41,7 @@ For an exported, already-stitched video, select **View as equirectangular video*
 
 ## Verification
 
-See [VERIFICATION.md](VERIFICATION.md) for exact checks and gaps. The current suite has **35 passing tests**, including parser limits, sample tables, mocked decoding lifecycle and EAC projection math. No camera recordings or derived previews are included in this repository.
+See [VERIFICATION.md](VERIFICATION.md) for exact checks and gaps. The current suite has **40 passing tests**, including parser limits, sample tables, mocked decoding lifecycle and EAC projection math. No camera recordings or derived previews are included in this repository.
 
 ## GitHub Pages
 
@@ -69,4 +69,6 @@ Original MAX `.360` files are not ordinary equirectangular videos. GoPro stitche
 
 Native playback now pauses its media clock while buffering paired frames, rather than skipping ahead during a decoder stall. If playback still buffers repeatedly, choose **Save playback diagnostics** after reproducing it. The downloaded JSON contains only technical counters, queue sizes, codec dimensions and timings; no filename, footage, audio, path or automatic upload. Share that report manually if troubleshooting is needed. Hardware performance remains device-dependent.
 
-The compressed-input reader batches local file access into at most 4 MiB cached windows per track (8 MiB retained total). This reduces per-frame file-read overhead without raising decoded-frame/GPU memory limits. Larger individual samples use exact uncached reads. Diagnostics v3 adds input read/cache counters, wall-clock read and decoder-output latency, and animation-frame gaps to help distinguish storage starvation from decoder or rendering delays. GPU upload timings do not measure asynchronous GPU draw completion. Real-device smoothness still needs confirmation.
+For files larger than 64 MiB, the compressed-input reader batches local file access into at most 4 MiB cached windows per track (8 MiB retained caches total). This reduces per-frame file-read overhead without raising decoded-frame/GPU memory limits. Larger individual samples use exact uncached reads. Diagnostics v3 adds input read/cache counters, wall-clock read and decoder-output latency, and animation-frame gaps to help distinguish storage starvation from decoder or rendering delays. GPU upload timings do not measure asynchronous GPU draw completion. Real-device smoothness still needs confirmation.
+
+Files up to **64 MiB** now prepare once in shared local memory before either decoder receives frames. This trades an upfront preparation wait for avoiding repeated slow file reads during playback and seeking. The limit is compressed-file storage, not total browser/decoder/GPU memory. Larger recordings retain the streamed-window strategy and may still buffer if local file reads cannot keep up. Diagnostics v4 reports the strategy and shared read statistics without counting the same preparation twice. This is local memory only, not an upload or persistent browser copy.

@@ -16,6 +16,8 @@ test('native diagnostics stay local and source changes clear buffering and diagn
  await context.openFile({name:'PRIVATE-FOOTAGE.360',size:100});
  assert.equal(element('diagnostics-panel').hidden,false);
  const generalStatus=element('status').textContent;
+ callbacks.onState({playing:true,buffering:true,preparing:true,currentTime:0,duration:20});
+ assert.match(element('playback-state').textContent,/Preparing this short clip/);
  callbacks.onState({playing:true,buffering:true,currentTime:1,duration:20});
  assert.match(element('playback-state').textContent,/Buffering paired/);
  assert.equal(element('status').textContent,generalStatus);
