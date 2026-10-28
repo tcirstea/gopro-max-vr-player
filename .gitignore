@@ -1,0 +1,7 @@
+node_modules/
+_site/
+*.360
+*.mp4
+*.mov
+*.webm
+.DS_Store
