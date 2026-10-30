@@ -68,3 +68,13 @@ test('native media advances on the renderer clock without relying on window anim
   player.close();const before=presented.length;tick(201);assert.equal(presented.length,before);
  },{manual:true});
 });
+test('native player forwards persistent volume independently of mute',async()=>{
+ await harness(async({player,contexts,settle})=>{
+  player.setVolume(.25);player.setMuted(false);
+  assert.equal(player.audioState.volume,.25);assert.equal(player.audioState.muted,false);
+  assert.equal(contexts.length,0);await player.play();await settle();
+  assert.equal(player.audioState.volume,.25);player.setMuted(true);player.setVolume(.7);
+  assert.equal(player.audioState.volume,.7);assert.equal(player.audioState.muted,true);
+  player.setMuted(false);assert.equal(player.getDiagnostics().audio.volume,.7);
+ });
+});

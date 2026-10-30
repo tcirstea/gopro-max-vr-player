@@ -2,13 +2,26 @@ import {createNativePlayer} from './native-player.js';
 import {inspectFile,formatTime} from './inspect.js';
 import {createRenderer,demoPanorama} from './renderer.js';
 const $=id=>document.getElementById(id), video=$('video');
+// Preferences belong to this page session, not to the loaded media. A temporary
+// unsupported-mode fallback must never overwrite the user's preferred mode.
+const preferences={muted:$('muted').checked,volume:1,audioMode:'stereo'};
+function syncAudioPreferences(){
+ $('muted').checked=preferences.muted;$('volume').value=preferences.volume;
+ video.muted=preferences.muted;video.volume=preferences.volume;
+ nativePlayer?.setMuted(preferences.muted);nativePlayer?.setVolume?.(preferences.volume);
+}
+function applyNativePreferences(player){
+ if(player.audioState?.modes.includes(preferences.audioMode) && player.audioState.mode!==preferences.audioMode)player.setAudioMode(preferences.audioMode);
+ syncAudioPreferences();
+}
+
 let renderer,objectURL=null,generation=0,pendingFile=null,nativePlayer=null,nativeTime=0;
 const status=message=>$('status').textContent=message;
 function playbackStatus(message){const element=$('playback-state');if(element.textContent!==message)element.textContent=message;element.hidden=!message;}
 try{renderer=createRenderer($('canvas'));renderer.setSource(demoPanorama());renderer.onBeforeRender?.(time=>nativePlayer?.advance(time));renderer.onViewOrientation?.(rotation=>nativePlayer?.setViewRotation(rotation));}catch(error){status(error.message);}
 const hasHEVC=video.canPlayType('video/mp4; codecs="hvc1.1.6.L153.B0"');
 $('capabilities').textContent=`This browser: WebGL ${renderer?'available':'unavailable'} · WebCodecs ${'VideoDecoder' in window?'available':'unavailable'} · HEVC media hint: ${hasHEVC||'not reported'}. These hints do not validate native MAX playback.`;
-function clearMedia(){nativeTime=0;nativePlayer?.close();nativePlayer=null;$('diagnostics-panel').hidden=true;playbackStatus('');$('play').textContent='Play';$('muted').disabled=false;$('audio-mode').hidden=true;video.muted=$('muted').checked;video.pause();video.removeAttribute('src');video.load();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=null;pendingFile=null;$('play').disabled=true;$('seek').disabled=true;$('seek').value=0;$('time').textContent='0:00 / 0:00';$('equirect').hidden=true;renderer?.setSource(demoPanorama());$('source').textContent='DEMO PANORAMA';$('view-title').textContent='Take a look around';}
+function clearMedia(){nativeTime=0;nativePlayer?.close();nativePlayer=null;$('diagnostics-panel').hidden=true;playbackStatus('');$('play').textContent='Play';$('muted').disabled=false;$('audio-mode').hidden=true;syncAudioPreferences();video.pause();video.removeAttribute('src');video.load();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=null;pendingFile=null;$('play').disabled=true;$('seek').disabled=true;$('seek').value=0;$('time').textContent='0:00 / 0:00';$('equirect').hidden=true;renderer?.setSource(demoPanorama());$('source').textContent='DEMO PANORAMA';$('view-title').textContent='Take a look around';}
 async function openFile(file){
  const current=++generation;clearMedia();$('filename').textContent=file.name;$('metadata').textContent='';status('Inspecting local container metadata…');
  try{const info=await inspectFile(file);if(current!==generation)return;
@@ -21,8 +34,8 @@ async function openFile(file){
    onState(state){if(current!==generation)return;nativeTime=state.currentTime;playbackStatus(state.preparing?(state.inputStrategy==='chunked-prefetch'?'Preparing 64 MiB playback buffers in local memory…':'Preparing this short clip in local memory…'):state.buffering?'Buffering paired video frames… Playback time is held until frames are ready.':state.playing?`Playing locally · ${state.audio?.available?(state.audio.mode==='ambisonic'?'Head-relative ambisonic headphones':state.audio.mode+' audio'):'Audio unavailable on this browser'}.`:'');$('play').textContent=state.playing?'Pause':'Play';$('time').textContent=`${formatTime(state.currentTime)} / ${formatTime(state.duration)}`;$('seek').value=state.currentTime/state.duration*1000;if(state.audio){$('muted').disabled=!state.audio.available;$('audio-mode').hidden=state.audio.modes.length<2;$('audio-mode').value=state.audio.mode;}},
    onError(error){if(current===generation){playbackStatus('');$('play').disabled=true;$('seek').disabled=true;status(`Native decoder stopped: ${error.message}`);}}
   });
-  if(current!==generation){player.close();return;}nativePlayer=player;$('diagnostics-panel').hidden=false;$('play').disabled=false;$('seek').disabled=false;$('muted').checked=true;video.muted=true;$('muted').disabled=!player.audioState?.available;$('audio-mode').hidden=(player.audioState?.modes.length||0)<2;$('audio-mode').value=player.audioState?.mode||'stereo';
-  status('Experimental native MAX pipeline opened locally. Press Play. Dual HEVC frames are mapped as EAC; overlap blending is included; native audio is synchronized when supported. Uncheck Muted to listen; headphone mode uses verified spatial metadata. Optical-flow seam correction is not implemented. Codec support does not guarantee real-time playback.');return;
+  if(current!==generation){player.close();return;}nativePlayer=player;$('diagnostics-panel').hidden=false;$('play').disabled=false;$('seek').disabled=false;applyNativePreferences(player);$('muted').disabled=!player.audioState?.available;$('audio-mode').hidden=(player.audioState?.modes.length||0)<2;$('audio-mode').value=player.audioState?.mode||'stereo';
+  status('Experimental native MAX pipeline opened locally. Press Play. Dual HEVC frames are mapped as EAC; overlap blending is included; native audio is synchronized when supported. Your audio preferences are retained; headphone mode uses verified spatial metadata. Optical-flow seam correction is not implemented. Codec support does not guarantee real-time playback.'+(player.audioState?.available&&!player.audioState.modes.includes(preferences.audioMode)?` Preferred ${preferences.audioMode} audio is unavailable in this clip; using ${player.audioState.mode}. Your preference is kept for the next compatible clip.`:''));return;
  }
  if(!info.videoTracks.length){status('No video track found in this container.');return;}
  pendingFile=file;$('equirect').hidden=false;status('Container inspected. If this is an already-stitched equirectangular (2:1) video, choose “View as equirectangular video”. Ordinary flat videos will appear distorted. Browser codec support is checked when loading.');
@@ -56,9 +69,10 @@ $('canvas').addEventListener('xrseek',event=>{
 for(const name of ['play','pause','ended'])video.addEventListener(name,()=>{if(objectURL&&!nativePlayer)$('play').textContent=video.paused?'Play':'Pause';});
 video.addEventListener('timeupdate',()=>{if(!objectURL||nativePlayer)return;$('time').textContent=`${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;$('seek').value=Number.isFinite(video.duration)&&video.duration>0?video.currentTime/video.duration*1000:0;});
 $('seek').addEventListener('input',()=>{try{if(nativePlayer)nativePlayer.seek($('seek').value/1000*nativePlayer.duration);else if(Number.isFinite(video.duration))video.currentTime=$('seek').value/1000*video.duration;}catch(error){status(`Seeking failed: ${error.message}`);}});video.addEventListener('seeked',()=>renderer?.refresh());
-$('muted').addEventListener('change',()=>{video.muted=$('muted').checked;nativePlayer?.setMuted($('muted').checked);});
-$('audio-mode').addEventListener('change',()=>nativePlayer?.setAudioMode($('audio-mode').value));
-$('demo').addEventListener('click',()=>{++generation;clearMedia();renderer?.reset();$('filename').textContent='Generated demo panorama';$('metadata').textContent='';status('This is a synthetic panorama for testing navigation—not GoPro footage.');});
+$('muted').addEventListener('change',()=>{preferences.muted=$('muted').checked;syncAudioPreferences();});
+$('volume').addEventListener('input',()=>{const value=Number($('volume').value);if(Number.isFinite(value)){preferences.volume=Math.max(0,Math.min(1,value));syncAudioPreferences();}});
+$('audio-mode').addEventListener('change',()=>{const mode=$('audio-mode').value;if(!nativePlayer?.audioState?.modes.includes(mode))return;preferences.audioMode=mode;nativePlayer.setAudioMode(mode);});
+$('demo').addEventListener('click',()=>{++generation;clearMedia();$('filename').textContent='Generated demo panorama';$('metadata').textContent='';status('This is a synthetic panorama for testing navigation—not GoPro footage.');});
 $('reset').addEventListener('click',()=>renderer?.reset());
 $('fullscreen').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await $('viewer').requestFullscreen();}catch{status('Full screen is unavailable in this browser or embedded context.');}});
 $('canvas').addEventListener('webglcontextlost',e=>{e.preventDefault();nativePlayer?.pause();video.pause();status('Graphics context lost. Reload this page to restore the viewer.');});

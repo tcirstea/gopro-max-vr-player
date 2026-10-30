@@ -35,3 +35,8 @@ Synthetic tests cover channel/axis mapping, packet tables, edit trimming, stale 
 - [W3C AAC WebCodecs registration](https://www.w3.org/TR/webcodecs-aac-codec-registration/): AAC configuration and encoded chunks.
 - [W3C WebCodecs](https://www.w3.org/TR/webcodecs/): media presentation timestamps and decoded AudioData.
 - [W3C Web Audio](https://www.w3.org/TR/webaudio/): scheduled buffer sources, channel routing, listener orientation and HRTF panners.
+
+
+## User audio preferences across clips
+
+The app retains mute, normalized volume (0–1), and preferred native audio mode in page-session memory. Native and equirectangular audio share mute/volume. A clip without a requested native mode uses its available default but does not overwrite the preference; silent/unsupported audio similarly leaves preferences intact. New clips remain paused. Native gain is `muted ? 0 : volume`, including after mode switches and context startup. Volume changes never implicitly unmute. No localStorage, media persistence or network transfer is added.

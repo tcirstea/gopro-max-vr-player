@@ -95,6 +95,11 @@ test('stick recenter neutralizes full pose, resets zoom, and aligns relative vis
   // Stabilization is applied after the same recentered viewing transform used visually.
   const correction=quaternionMatrix([Math.cos(.1),Math.sin(.1),0,0]);const maxFrame={width:4096,height:1344};renderer.setMaxSources(maxFrame,maxFrame,{stabilization:[Math.cos(.1),Math.sin(.1),0,0]});xrFrame(80,frame);
   near(orientation,multiplyMatrix3(correction,multiplyMatrix3(uniforms.xrCenter,viewRotationMatrix(0,0,pose))));
+  // Source switches keep view preferences, while source-specific stabilization resets.
+  events.wheel({deltaY:-200,preventDefault(){}});xrFrame(90,frame);const retainedFov=uniforms.fov,retainedCenter=uniforms.xrCenter.slice();
+  renderer.setSource(null);xrFrame(92,frame);assert.equal(uniforms.fov,retainedFov);near(uniforms.xrCenter,retainedCenter);near(orientation,relative);
+  renderer.setMaxSources(maxFrame,maxFrame);xrFrame(94,frame);assert.equal(uniforms.fov,retainedFov);near(uniforms.xrCenter,retainedCenter);near(orientation,relative);
+  renderer.reset();xrFrame(96,frame);assert.equal(uniforms.fov,Math.PI/2);near(orientation,identity);
   await renderer.enterVR();windowFrame(100);near(uniforms.xrCenter,identity);
   renderer.setSource(null);await renderer.enterVR();xrFrame(120,frame);near(uniforms.xrCenter,identity);near(orientation,viewRotationMatrix(0,0,pose));
   input.gamepad.buttons[3].pressed=false;xrFrame(140,frame);input.gamepad.buttons[3].pressed=true;xrFrame(160,frame);near(orientation,identity);

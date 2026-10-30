@@ -13,16 +13,16 @@ export async function createNativeAudio(movie,{onChange=()=>{}}={}){
   if(track.kind==='pcm-s32le')tracks.push(track);
   else if(globalThis.AudioDecoder&&globalThis.EncodedAudioChunk){try{if((await AudioDecoder.isConfigSupported(track.config)).supported)tracks.push(track);}catch{/* Unsupported AAC does not prevent video or spatial PCM. */}}
  }
- let selected=tracks.find(t=>t.mode==='stereo')||tracks.find(t=>t.mode==='mono')||tracks[0],context=null,gain=null,spatial=null,decoder=null,closed=false,failed=false,generation=0,reading=false,index=0,pending=0,done=false,queue=[],time=0,muted=true,rotation=null;
+ let selected=tracks.find(t=>t.mode==='stereo')||tracks.find(t=>t.mode==='mono')||tracks[0],context=null,gain=null,spatial=null,decoder=null,closed=false,failed=false,generation=0,reading=false,index=0,pending=0,done=false,queue=[],time=0,muted=true,volume=1,rotation=null;
  let anchor=null,scheduledEnd=0;const sources=new Set();
  const stats={decodedPackets:0,scheduledBuffers:0,underruns:0,maxQueuedBuffers:0,maxPending:0};
- const state=()=>({available:!!selected&&!failed&&!closed,mode:selected?.mode||'unavailable',modes:tracks.map(t=>t.mode),muted,contextState:context?.state||'not-started',failed,spatialMetadata:selected?.spatial?{order:1,ordering:'ACN',normalization:'SN3D'}:null});
+ const state=()=>({available:!!selected&&!failed&&!closed,mode:selected?.mode||'unavailable',modes:tracks.map(t=>t.mode),muted,volume,contextState:context?.state||'not-started',failed,spatialMetadata:selected?.spatial?{order:1,ordering:'ACN',normalization:'SN3D'}:null});
  function stop(){for(const s of sources){try{s.stop();}catch{}s.disconnect();}sources.clear();anchor=null;scheduledEnd=time;}
  function closeDecoder(){if(decoder&&decoder.state!=='closed')decoder.close();decoder=null;}
  function fail(){if(closed||failed)return;failed=true;stop();closeDecoder();queue=[];pending=0;onChange();}
  function ensureContext(){
   if(context)return;
-  context=new Context({latencyHint:'interactive',sampleRate:selected.sampleRate});gain=context.createGain();gain.gain.value=muted?0:1;gain.connect(context.destination);
+  context=new Context({latencyHint:'interactive',sampleRate:selected.sampleRate});gain=context.createGain();gain.gain.value=muted?0:volume;gain.connect(context.destination);
   if(selected.mode==='ambisonic'){spatial=createSpatialAudio(context,gain);if(rotation)spatial.setViewRotation(rotation);}
  }
  function push(planes,start,sampleRate){
@@ -93,7 +93,8 @@ export async function createNativeAudio(movie,{onChange=()=>{}}={}){
   get available(){return !!selected&&!failed&&!closed;},get state(){return state();},get ready(){return !!context&&context.state==='running';},
   async unlock(){if(!selected||failed||closed)return;try{ensureContext();if(!decoder&&!queue.length&&!done){configure(generation);pump();}}catch(error){fail();throw new Error(`Audio could not start: ${error.message}`);}try{await context.resume();if(!closed)onChange();}catch(error){throw new Error(`Audio could not start: ${error.message}`);}},
   seek,readyEnd,clock,schedule,pause,
-  setMuted(value){muted=!!value;if(gain)gain.gain.setValueAtTime(muted?0:1,context.currentTime);onChange();},
+  setMuted(value){muted=!!value;if(gain)gain.gain.setValueAtTime(muted?0:volume,context.currentTime);onChange();},
+  setVolume(value){if(closed||!Number.isFinite(value))return;volume=Math.max(0,Math.min(1,value));if(gain)gain.gain.setValueAtTime(muted?0:volume,context.currentTime);onChange();},
   setViewRotation(value){rotation=value;spatial?.setViewRotation(value);},
   select(mode,at){const next=tracks.find(t=>t.mode===mode);if(!next||closed)return false;stop();spatial?.close();spatial=null;selected=next;failed=false;try{if(context&&selected.mode==='ambisonic'){spatial=createSpatialAudio(context,gain);if(rotation)spatial.setViewRotation(rotation);}seek(at);}catch{fail();return false;}onChange();return !failed;},
   getDiagnostics(){return {...state(),sampleRate:selected?.sampleRate||null,channels:selected?.channels||null,queuedBuffers:queue.length,pending,scheduledEnd,clock:clock(),done,...stats};},

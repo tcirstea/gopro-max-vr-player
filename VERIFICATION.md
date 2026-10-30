@@ -116,3 +116,12 @@ Physical Quest validation remains unavailable; this is automated/mock verificati
 - Automated regression coverage checks rapid clicks/API calls, delayed graphics setup, repeated exit, external active-session rejection, retry, early session end, failed setup/cleanup, and app error labeling. Real PC Edge/headset session behavior still requires device verification.
 
 Combined recenter/session follow-up verification: **128/128 Node tests passed**, plus syntax checks for every source and test JavaScript file. No physical Quest or PC Edge headset test was performed in this environment.
+
+
+## Retained per-session preferences — 2026-10-30
+
+App preference state is separate from native audio state. Mute, volume and preferred audio mode are applied to each new player; unsupported modes temporarily fall back without overwriting preference. Native and equirectangular share mute/volume. New clips stay paused at their beginning. Zoom, desktop direction and active XR recenter offset are not reset by opening a file or the demo; only explicit reset actions change them. Source-specific stabilization/decoders/diagnostics still reset. No persistence across page reload, file storage or upload was added.
+
+Automated checks cover audio gain before/after context creation, mute/unmute, mode switches, bounds, seeks and native-player volume delegation, plus source-switch preference and renderer regressions. Physical headset/browser audio behavior remains device-unverified; the prior local browser launch restriction still applies. Manual check: unmute, lower volume, choose spatial audio, zoom and recenter; switch native clips, an equirectangular clip, a silent/stereo-only clip, then a compatible native clip. Verify retained preferences, appropriate fallback, paused startup and explicit reset behavior.
+
+Final retained-preferences checks: **135/135 Node tests passed**, and every source/test JavaScript file passed `node --check`. Tests include rapid source switching with stale callbacks, preference changes during a pending load, unsupported/silent audio fallback and restoration, native↔equirectangular↔demo transitions, and XR zoom/recenter preservation until explicit reset.

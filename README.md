@@ -28,9 +28,19 @@ npm start
 
 Open an original MAX `.360` file to attempt native decoding locally. The current native demux path accepts **two 4096×1344 HEVC video tracks**. WebCodecs requires HTTPS or localhost, and HEVC availability depends on browser, OS and hardware. Passing a capability check does not guarantee two simultaneous decoders can sustain playback. Unsupported devices get an error; there is no transcoding or upload fallback.
 
-For an exported, already-stitched video, select **View as equirectangular video**. Choose actual equirectangular material (normally 2:1); dimensions alone do not establish projection. Audio/mute works through the browser video element for this path. Native MAX audio starts muted: uncheck **Muted** to listen. When explicit supported spatial metadata is present, choose **Spatial headphones (experimental)** for head-relative sound. Stereo does not rotate with the view. See [AUDIO.md](AUDIO.md) for format support and verification limits.
+For an exported, already-stitched video, select **View as equirectangular video**. Choose actual equirectangular material (normally 2:1); dimensions alone do not establish projection. Audio/mute works through the browser video element for this path. A fresh page starts muted: uncheck **Muted** to listen. Mute, volume and preferred native audio mode are then retained when opening other clips. When explicit supported spatial metadata is present, choose **Spatial headphones (experimental)** for head-relative sound. Stereo does not rotate with the view. See [AUDIO.md](AUDIO.md) for format support and verification limits.
 
 **Enter VR** is enabled only if the browser reports immersive WebXR support. Both eyes share the same monoscopic panorama; headset translation is intentionally ignored. A supporting headset/browser and secure context are required.
+
+## Preferences when switching videos
+
+Preferences stay in memory for the current page session—no footage, filenames or preferences are uploaded or saved to browser storage.
+
+- **Mute and volume** carry over between native MAX, equirectangular clips and the demo. Volume has its own slider; changing it does not silently unmute audio.
+- **Preferred native audio mode** is remembered separately from each clip's available modes. If spatial headphones are unavailable, the clip uses its supported default (normally stereo), without losing the spatial preference; the next compatible clip restores it. Equirectangular playback uses the browser's audio path, not native spatial decoding.
+- **Zoom, viewing direction and the current XR recenter offset** survive file switches and the demo. Only explicit **Reset view** / right-stick click resets zoom and view. Leaving/reentering VR still clears its session-specific recenter offset as documented below.
+- **Video-dependent state resets:** the new clip starts paused at its beginning with fresh decoders, duration, buffering, telemetry stabilization and diagnostics. Retaining an unmuted preference does not auto-play a new clip.
+- A page reload starts fresh (muted, full volume, stereo preference and default view). Retention across reloads is not implemented.
 
 ## Quest controller controls (immersive VR)
 

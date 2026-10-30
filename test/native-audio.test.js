@@ -62,3 +62,20 @@ test('short edited tracks never schedule beyond trim even when trimmed decoded p
 test('AudioContext suspension freezes at its actual media instant instead of rewinding to last schedule',async()=>harness(async({create,contexts})=>{
  const a=await create();await a.unlock();await settle();const c=contexts[0];a.schedule(0,.15);c.advance(.07);near(a.clock(),.05);c.state='suspended';near(a.clock(),.05);assert.equal(a.ready,false);c.state='running';near(a.clock(),.05);
 }));
+
+test('volume preferences apply before context creation and survive mute and mode switches',async()=>harness(async({create,contexts})=>{
+ const a=await create(movie([track({kind:'aac'}),track({inputIndex:3})]));
+ assert.equal(a.state.volume,1);a.setVolume(.35);a.setMuted(false);
+ assert.equal(contexts.length,0);assert.equal(a.state.volume,.35);
+ await a.unlock();await settle();const gain=contexts[0].nodes[0].gain;near(gain.value,.35);
+ a.setMuted(true);near(gain.value,0);a.setVolume(.6);near(gain.value,0);assert.equal(a.state.volume,.6);
+ a.setMuted(false);near(gain.value,.6);a.select('ambisonic',.3);await settle();near(gain.value,.6);assert.equal(a.state.volume,.6);
+ a.select('stereo',.4);await settle();near(gain.value,.6);a.seek(.8);near(gain.value,.6);
+}));
+test('volume bounds and invalid values never produce invalid gain or change mute',async()=>harness(async({create,contexts})=>{
+ const a=await create();await a.unlock();const gain=contexts[0].nodes[0].gain;
+ a.setVolume(2);assert.equal(a.state.volume,1);near(gain.value,0);
+ a.setMuted(false);near(gain.value,1);a.setVolume(-1);near(gain.value,0);assert.equal(a.state.muted,false);
+ a.setVolume(.4);for(const value of [NaN,Infinity,-Infinity,undefined,null,'0.8'])a.setVolume(value);
+ assert.equal(a.state.volume,.4);near(gain.value,.4);a.close();a.setVolume(.9);assert.equal(a.state.volume,.4);
+}));
