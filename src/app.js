@@ -59,12 +59,13 @@ renderer?.onXRPanelState?.(()=>({
  mediaId:generation,playing:nativePlayer?nativePlayer.playing:!!objectURL&&!video.paused&&!video.ended,
  advancing:nativePlayer?nativeAdvancing:!!objectURL&&!video.paused&&!video.ended&&!video.seeking&&video.readyState>=3,
  currentTime:nativePlayer?nativeTime:video.currentTime,duration:nativePlayer?nativePlayer.duration:video.duration,
- canPlay:!$('play').disabled,canSeek:!$('seek').disabled,
+ canPlay:!$('play').disabled,canSeek:!$('seek').disabled,canMute:!$('muted').disabled,muted:preferences.muted,
  canPrevious:!$('previous').disabled,canNext:!$('next').disabled
 }));
 $('canvas').addEventListener('xrpanelaction',event=>{
  const {action,value}=event.detail||{};
  if(action==='play')togglePlayback();
+ else if(action==='mute'&&!$('muted').disabled){preferences.muted=!preferences.muted;syncAudioPreferences();}
  else if(action==='previous')selectClip(playlistIndex-1);
  else if(action==='next')selectClip(playlistIndex+1);
  else if(action==='seek'&&!$('seek').disabled&&Number.isFinite(value)){

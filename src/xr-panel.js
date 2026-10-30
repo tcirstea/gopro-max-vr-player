@@ -1,6 +1,9 @@
 // World-anchored, stereo WebXR transport. All positions are in reference-space
 // metres, independent of panorama zoom/drag. No DOM overlay support is required.
 const WIDTH=1.2, HEIGHT=.375;
+// Shared layout keeps rendered buttons and ray targets in lockstep.
+const BUTTONS=['previous','play','next','mute','exit'].map((action,i)=>({action,left:.04+i*.192,width:.16}));
+const enabled=(action,state)=>action==='exit'||!!state[{previous:'canPrevious',play:'canPlay',next:'canNext',mute:'canMute'}[action]];
 const clamp=x=>Math.max(0,Math.min(1,x));
 const dot=(a,b)=>a.reduce((n,v,i)=>n+v*b[i],0);
 const sub=(a,b)=>a.map((v,i)=>v-b[i]);
@@ -28,10 +31,7 @@ export function panelTarget(hit,state={}){
  const {u,v}=hit;
  if(v>=.53&&v<=.78&&u>=.06&&u<=.94)return state.canSeek?'seek':null;
  if(v<.12||v>.43)return null;
- if(u>=.04&&u<=.24)return state.canPrevious?'previous':null;
- if(u>=.28&&u<=.48)return state.canPlay?'play':null;
- if(u>=.52&&u<=.72)return state.canNext?'next':null;
- if(u>=.76&&u<=.96)return 'exit';
+ for(const {action,left,width} of BUTTONS)if(u>=left&&u<=left+width)return enabled(action,state)?action:null;
  return null;
 }
 export function createPanelTimer(){
@@ -58,13 +58,12 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
  function act(action,value){onAction(action,value);timer.reset();}
  function paint(state){
  const progress=preview??(state.duration>0?clamp(state.currentTime/state.duration):0);
- const key=JSON.stringify([state.playing,state.canPlay,state.canSeek,state.canPrevious,state.canNext,Math.floor(state.currentTime||0),Math.floor(state.duration||0),progress,hover]);
+ const key=JSON.stringify([state.playing,state.canPlay,state.canSeek,state.canPrevious,state.canNext,state.canMute,state.muted,Math.floor(state.currentTime||0),Math.floor(state.duration||0),progress,hover]);
  if(key===lastPaint)return;lastPaint=key;
  ctx.fillStyle='#11232c';ctx.fillRect(0,0,1024,320);
- for(const [i,action]of ['previous','play','next','exit'].entries()){
-  const enabled=action==='exit'||state[{previous:'canPrevious',play:'canPlay',next:'canNext'}[action]];
-  ctx.fillStyle=hover?.target===action?'#3f7284':'#263f4a';ctx.fillRect((.04+i*.24)*1024,.12*320,.2*1024,.31*320);
-  ctx.fillStyle=enabled?'#ffffff':'#77858b';ctx.font='bold 29px sans-serif';ctx.textAlign='center';ctx.fillText({previous:'Previous',play:state.playing?'Pause':'Play',next:'Next',exit:'Exit VR'}[action],(.14+i*.24)*1024,.31*320);
+ for(const {action,left,width} of BUTTONS){
+  ctx.fillStyle=hover?.target===action?'#3f7284':'#263f4a';ctx.fillRect(left*1024,.12*320,width*1024,.31*320);
+  ctx.fillStyle=enabled(action,state)?'#ffffff':'#77858b';ctx.font='bold 29px sans-serif';ctx.textAlign='center';ctx.fillText({previous:'Previous',play:state.playing?'Pause':'Play',next:'Next',mute:state.muted?'Unmute':'Mute',exit:'Exit VR'}[action],(left+width/2)*1024,.31*320);
  }
  ctx.fillStyle='#52646a';ctx.fillRect(.06*1024,.64*320,.88*1024,12);ctx.fillStyle=state.canSeek?'#9ce2dc':'#77858b';ctx.fillRect(.06*1024,.64*320,.88*1024*progress,12);
  ctx.beginPath();ctx.arc((.06+.88*progress)*1024,.64*320+6,12,0,Math.PI*2);ctx.fill();
