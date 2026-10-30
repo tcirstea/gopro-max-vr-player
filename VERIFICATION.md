@@ -144,3 +144,10 @@ Tests cover navigation boundaries, auto-advance and repeated end notifications, 
 Controller-drag/playlist checks are automated/mock verification; no physical headset validation or successful local browser UI smoke test is claimed.
 
 Final revised controller-drag + playlist verification: **147/147 tests passed**, including **17 focused XR tests**, plus syntax checks for every source/test JavaScript file. These are local checks; GitHub Actions reruns the full suite before Pages deployment.
+
+
+## Right-stick click now resets zoom only — 2026-10-30
+
+This supersedes the earlier stick-click recenter behavior. Right-stick click resets only FOV to its default; it does not modify yaw, pitch, XR recenter/drag correction, active controller-drag anchor or spatial-audio orientation. Full recenter remains available through the separate Reset view button. Click remains edge-triggered, with axes suppressed while held. Tests verify orientation and roll preservation, including while dragging, plus normal one-shot click behavior and unchanged explicit Reset view behavior. Physical headset validation remains outstanding.
+
+Zoom-only click release check: **147/147 tests passed**, plus all source/test JavaScript syntax checks. Regression coverage confirms preserved yaw/pitch, controller roll correction, audio orientation and active drag anchor; full view reset is tested separately through `renderer.reset()`.

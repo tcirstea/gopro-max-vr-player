@@ -52,16 +52,16 @@ test('reset and controller reconnect clear repeat and button state',()=>{
  h.session.inputSources=[];h.tick(30);h.input.gamepad.buttons[4].pressed=true;h.session.inputSources=[h.input];h.tick(40);assert.deepEqual(h.toggles,[]);
  h.input.gamepad.buttons[4].pressed=false;h.tick(50);h.input.gamepad.buttons[4].pressed=true;h.tick(60);assert.equal(h.toggles.length,1);
 });
-test('stick click recenters once, suppresses axes while held, and rearms on release',()=>{
- let recenters=0;const h=harness();
- const controls=createXRControls({zoom:v=>h.zoom.push(v),seek:v=>h.seek.push(v),togglePlayback:()=>h.toggles.push(true),recenter:()=>recenters++});
+test('stick click resets zoom once, suppresses axes while held, and rearms on release',()=>{
+ let zoomResets=0;const h=harness();
+ const controls=createXRControls({zoom:v=>h.zoom.push(v),seek:v=>h.seek.push(v),togglePlayback:()=>h.toggles.push(true),resetZoom:()=>zoomResets++});
  controls.update(h.session,0);h.input.gamepad.axes=[0,0,1,1];h.input.gamepad.buttons[3].pressed=true;
- controls.update(h.session,20);controls.update(h.session,1000);assert.equal(recenters,1);assert.deepEqual(h.zoom,[]);assert.deepEqual(h.seek,[]);
+ controls.update(h.session,20);controls.update(h.session,1000);assert.equal(zoomResets,1);assert.deepEqual(h.zoom,[]);assert.deepEqual(h.seek,[]);
  h.input.gamepad.buttons[4].pressed=true;controls.update(h.session,1020);assert.equal(h.toggles.length,1,'A remains independent');
  h.input.gamepad.buttons[3].pressed=false;controls.update(h.session,1040);assert.ok(h.zoom.at(-1)>0);
- h.input.gamepad.buttons[3].pressed=true;controls.update(h.session,1060);assert.equal(recenters,2);
- controls.reset();controls.update(h.session,1080);assert.equal(recenters,2,'held on session entry must not recenter');
- h.session.inputSources=[];controls.update(h.session,1100);h.session.inputSources=[h.input];controls.update(h.session,1120);assert.equal(recenters,2,'held on reconnect must not recenter');
+ h.input.gamepad.buttons[3].pressed=true;controls.update(h.session,1060);assert.equal(zoomResets,2);
+ controls.reset();controls.update(h.session,1080);assert.equal(zoomResets,2,'held on session entry must not reset zoom');
+ h.session.inputSources=[];controls.update(h.session,1100);h.session.inputSources=[h.input];controls.update(h.session,1120);assert.equal(zoomResets,2,'held on reconnect must not reset zoom');
 });
 test('grip rising/release edges clutch once, ignore held entry, and preserve zoom and A',()=>{
  const h=harness(),drag=[],sources=[];const controls=createXRControls({zoom:v=>h.zoom.push(v),seek:v=>h.seek.push(v),togglePlayback:()=>h.toggles.push(true),dragView:(v,source)=>{drag.push(v);if(v)sources.push(source);}});

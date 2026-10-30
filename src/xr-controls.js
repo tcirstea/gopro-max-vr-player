@@ -4,7 +4,7 @@ export const DEFAULT_FOV = Math.PI / 2;
 export function zoomFov(fov, wheelDelta) {
   return Math.max(.4, Math.min(2.1, fov + wheelDelta * .001));
 }
-export function createXRControls({zoom, seek, togglePlayback, recenter=()=>{},dragView=()=>{}}) {
+export function createXRControls({zoom, seek, togglePlayback, resetZoom=()=>{},dragView=()=>{}}) {
   let source=null, lastTime=null, pressed=false, stickPressed=false, gripPressed=false, dragging=false, direction=0, repeatAt=0;
   function reset(){if(dragging)dragView(false);dragging=false;gripPressed=false;source=null;lastTime=null;pressed=false;stickPressed=false;direction=0;repeatAt=0;}
   return {reset, update(session,time){
@@ -20,7 +20,7 @@ export function createXRControls({zoom, seek, togglePlayback, recenter=()=>{},dr
     if(!gripDown&&dragging){dragging=false;dragView(false);}
     gripPressed=gripDown;
     const stickDown=!!pad.buttons?.[3]?.pressed;
-    if(stickDown&&!stickPressed)recenter();
+    if(stickDown&&!stickPressed)resetZoom();
     stickPressed=stickDown;
     // Clicking the stick must not also seek or immediately undo the zoom reset.
     const x=stickDown?0:axis(2),y=stickDown?0:axis(3);

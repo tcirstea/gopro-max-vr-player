@@ -67,7 +67,7 @@ test('XR controller zoom reaches shader FOV and transport events while desktop w
   await renderer.enterVR();xrFrame(60,frame);assert.equal(dispatched.filter(e=>e.type==='xrtoggleplay').length,1,'held button does not toggle on reentry');
  }finally{for(const key of keys){if(saved[key])Object.defineProperty(globalThis,key,saved[key]);else delete globalThis[key];}}
 });
-test('stick recenter neutralizes full pose, resets zoom, and aligns relative visual/audio rotations',async()=>{
+test('explicit view reset neutralizes full pose; stick click resets only zoom and preserves controller drag',async()=>{
  const keys=['requestAnimationFrame','document','navigator','XRWebGLLayer'];
  const saved=Object.fromEntries(keys.map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
  const events={},sessionEvents={},uniforms={};let xrFrame,windowFrame,orientation;
@@ -85,8 +85,8 @@ test('stick recenter neutralizes full pose, resets zoom, and aligns relative vis
   const renderer=createRenderer(canvas);renderer.onViewOrientation(r=>orientation=Array.from(r));
   events.keydown({key:'ArrowLeft',preventDefault(){}});events.wheel({deltaY:-300,preventDefault(){}});
   await renderer.enterVR();xrFrame(0,frame);assert.notEqual(uniforms.fov,Math.PI/2);
-  // Tracking loss defers the click until a pose is available.
-  const original=pose;pose=null;input.gamepad.buttons[3].pressed=true;xrFrame(20,frame);assert.notEqual(uniforms.fov,Math.PI/2);
+  // Tracking loss defers explicit full view reset until a pose is available.
+  const original=pose;pose=null;renderer.reset();xrFrame(20,frame);
   pose=original;xrFrame(40,frame);assert.equal(uniforms.fov,Math.PI/2);assert.equal(uniforms.yaw,0);assert.equal(uniforms.pitch,0);near(orientation,identity);
   near(multiplyMatrix3(uniforms.xrCenter,viewRotationMatrix(0,0,pose)),identity);
   const anchor=uniforms.xrCenter.slice();
@@ -102,17 +102,26 @@ test('stick recenter neutralizes full pose, resets zoom, and aligns relative vis
   renderer.reset();xrFrame(96,frame);assert.equal(uniforms.fov,Math.PI/2);near(orientation,identity);
   await renderer.enterVR();windowFrame(100);near(uniforms.xrCenter,identity);
   renderer.setSource(null);await renderer.enterVR();xrFrame(120,frame);near(uniforms.xrCenter,identity);near(orientation,viewRotationMatrix(0,0,pose));
-  input.gamepad.buttons[3].pressed=false;xrFrame(140,frame);input.gamepad.buttons[3].pressed=true;xrFrame(160,frame);near(orientation,identity);
+  xrFrame(140,frame);renderer.reset();xrFrame(160,frame);near(orientation,identity);
   // Controller movement changes correction; head-only motion keeps normal tracking.
   input.gripSpace={};let controller=matrix.slice();frame.getPose=space=>{assert.equal(space,input.gripSpace);return {transform:{matrix:controller}};};
   input.gamepad.buttons[3].pressed=false;input.gamepad.buttons[1].pressed=true;xrFrame(180,frame);near(orientation,identity);const gripFov=uniforms.fov,gripCenter=uniforms.xrCenter.slice();
   const gripStart=pose;pose=poseFor(quaternionMatrix([.6,.3,-.2,.1]));xrFrame(200,frame);near(uniforms.xrCenter,gripCenter);near(orientation,multiplyMatrix3(gripCenter,viewRotationMatrix(0,0,pose)));
   controller=poseFor(quaternionMatrix([Math.cos(.2),0,0,Math.sin(.2)]));controller[12]=controller[13]=controller[14]=0;xrFrame(220,frame);
   assert.notDeepEqual(uniforms.xrCenter,gripCenter);near(orientation,multiplyMatrix3(uniforms.xrCenter,viewRotationMatrix(0,0,pose)));assert.equal(uniforms.fov,gripFov);
+  // Stick click only restores default zoom, even with pan, roll correction, and grip held.
+  events.keydown({key:'ArrowLeft',preventDefault(){}});events.keydown({key:'ArrowUp',preventDefault(){}});events.wheel({deltaY:-250,preventDefault(){}});xrFrame(225,frame);
+  const beforeClick={center:uniforms.xrCenter.slice(),orientation:orientation.slice(),yaw:uniforms.yaw,pitch:uniforms.pitch};assert.notEqual(uniforms.fov,Math.PI/2);assert.notEqual(uniforms.yaw,0);assert.notEqual(uniforms.pitch,0);
+  input.gamepad.buttons[3].pressed=true;xrFrame(226,frame);assert.equal(uniforms.fov,Math.PI/2);assert.equal(uniforms.yaw,beforeClick.yaw);assert.equal(uniforms.pitch,beforeClick.pitch);near(uniforms.xrCenter,beforeClick.center);near(orientation,beforeClick.orientation);
+  // A held click does not repeatedly reset, and original drag anchor is still used.
+  events.wheel({deltaY:-100,preventDefault(){}});xrFrame(227,frame);assert.equal(uniforms.fov,Math.PI/2-.1);
+  controller=matrix.slice();xrFrame(228,frame);near(uniforms.xrCenter,gripCenter);
+  controller=poseFor(quaternionMatrix([Math.cos(.2),0,0,Math.sin(.2)]));controller[12]=controller[13]=controller[14]=0;xrFrame(229,frame);near(uniforms.xrCenter,beforeClick.center);
+  input.gamepad.buttons[3].pressed=false;events.keydown({key:'ArrowRight',preventDefault(){}});events.keydown({key:'ArrowDown',preventDefault(){}});xrFrame(230,frame);
   const draggedCenter=uniforms.xrCenter.slice(),releasedOrientation=orientation.slice();input.gamepad.buttons[1].pressed=false;xrFrame(240,frame);near(orientation,releasedOrientation);near(uniforms.xrCenter,draggedCenter);
   pose=gripStart;xrFrame(260,frame);near(orientation,multiplyMatrix3(draggedCenter,viewRotationMatrix(0,0,pose)));near(uniforms.xrCenter,draggedCenter);
   // Recenter while held replaces the controller anchor; moving only the head does not cancel normal tracking.
-  input.gamepad.buttons[1].pressed=true;xrFrame(280,frame);input.gamepad.buttons[3].pressed=true;xrFrame(300,frame);near(orientation,identity);const recentered=uniforms.xrCenter.slice();
+  input.gamepad.buttons[1].pressed=true;xrFrame(280,frame);renderer.reset();xrFrame(300,frame);near(orientation,identity);const recentered=uniforms.xrCenter.slice();
   pose=original;xrFrame(320,frame);near(uniforms.xrCenter,recentered);near(orientation,multiplyMatrix3(recentered,viewRotationMatrix(0,0,pose)));
 
  }finally{for(const key of keys){if(saved[key])Object.defineProperty(globalThis,key,saved[key]);else delete globalThis[key];}}
