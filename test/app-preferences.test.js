@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 function harness(){
  const elements=new Map(),players=[],pending=new Map();let resets=0;
- const element=id=>{if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,disabled:false,value:0,checked:true,handlers:{},addEventListener(n,f){this.handlers[n]=f;},canPlayType:()=>'',pause(){},load(){},removeAttribute(){}});return elements.get(id);};
+ const element=id=>{if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,disabled:false,value:0,checked:true,handlers:{},addEventListener(n,f){this.handlers[n]=f;},canPlayType:()=>'',pause(){},load(){},removeAttribute(){},replaceChildren(){}});return elements.get(id);};
  const context=vm.createContext({document:{getElementById:element},window:{addEventListener(){}},URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},createRenderer:()=>({setSource(){},setMaxSources(){},reset(){resets++;}}),demoPanorama:()=>({}),formatTime:String,inspectFile:async f=>({nativeCandidate:!f.flat,tracks:[],videoTracks:[{}]}),createNativePlayer:async(f,callbacks)=>{
  const player={name:f.name,callbacks,closed:false,duration:10,audioState:{available:!f.silent,modes:f.silent?[]:f.stereo?['stereo']:['stereo','ambisonic'],mode:'stereo'},setMuted(v){this.muted=v;},setVolume(v){this.volume=v;},setAudioMode(v){this.audioState.mode=v;},close(){this.closed=true;}};players.push(player);
  if(f.pending)await new Promise(resolve=>pending.set(f.name,resolve));return player;

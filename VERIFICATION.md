@@ -125,3 +125,22 @@ App preference state is separate from native audio state. Mute, volume and prefe
 Automated checks cover audio gain before/after context creation, mute/unmute, mode switches, bounds, seeks and native-player volume delegation, plus source-switch preference and renderer regressions. Physical headset/browser audio behavior remains device-unverified; the prior local browser launch restriction still applies. Manual check: unmute, lower volume, choose spatial audio, zoom and recenter; switch native clips, an equirectangular clip, a silent/stereo-only clip, then a compatible native clip. Verify retained preferences, appropriate fallback, paused startup and explicit reset behavior.
 
 Final retained-preferences checks: **135/135 Node tests passed**, and every source/test JavaScript file passed `node --check`. Tests include rapid source switching with stale callbacks, preference changes during a pending load, unsupported/silent audio fallback and restoration, native↔equirectangular↔demo transitions, and XR zoom/recenter preservation until explicit reset.
+
+
+## Right-grip controller drag and rotation — 2026-10-30
+
+Right grip/squeeze (the lower/side trigger, xr-standard button 1) grabs the panorama using the controller's tracked grip pose (target-ray pose fallback). On press it captures the existing correction, controller position/rotation and head orientation. Controller displacement in the viewing plane at grab time pans the panorama at 2 radians/metre; inverse controller rotation additionally adjusts yaw, pitch and roll. Forward/back translation is ignored. Release retains the accumulated correction without a discrete snap. Head tracking stays independent: moving only the head does not change the panorama correction. This reorients 360° footage; it cannot create positional camera movement.
+
+The same correction feeds shader sampling and spatial audio, before video-specific stabilization. Zoom remains unchanged; explicit recenter while held establishes a fresh neutral controller anchor and default zoom. Disconnect, focus loss and session exit cancel drag input. Holding grip on entry/reconnection does not activate it until released and pressed again. Tracking loss rebases on the next valid pose instead of applying a stale anchor. Source switches retain the viewing correction, matching the existing preference policy.
+
+Physical Quest/PC headset comfort and behavior are not device-verified. Manual check: hold the right grip, move the controller left/right/up/down to drag, then rotate it including roll to level a tilted video. Release and look around normally; the new adjustment should remain. Head-only movement during grip must still look around rather than drag. Repeat at nondefault zoom and after recenter, while paused/playing, with spatial audio, across focus interruption and controller reconnect. Upper trigger remains unassigned; trigger-plus-stick turning is still deferred.
+
+## Local playlist — 2026-10-30
+
+Multi-file selection now creates a local queue in file-picker order, with Previous/Next and a clip dropdown/count. Initial selection is paused; manual navigation preserves playing/paused intent, and native/browser end-of-clip advances to the next clip without looping at the end. Non-native clips retain explicit per-clip projection confirmation; blocked autoplay asks for Play. Unsupported clips stop with a skip hint. New selection/demo invalidates pending loads and end callbacks. Audio/view preferences persist and only the current clip has active playback resources.
+
+Tests cover navigation boundaries, auto-advance and repeated end notifications, manual paused/playing transitions, projection confirmation, unsupported clips, selection races/stale completions, blocked playback, stale play rejection, and queued advancement canceled by demo or a new queue. Files/filenames remain local; no media has been added to the repository or uploaded. Physical headset/browser playlist playback remains unverified.
+
+Controller-drag/playlist checks are automated/mock verification; no physical headset validation or successful local browser UI smoke test is claimed.
+
+Final revised controller-drag + playlist verification: **147/147 tests passed**, including **17 focused XR tests**, plus syntax checks for every source/test JavaScript file. These are local checks; GitHub Actions reruns the full suite before Pages deployment.

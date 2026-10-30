@@ -32,6 +32,14 @@ For an exported, already-stitched video, select **View as equirectangular video*
 
 **Enter VR** is enabled only if the browser reports immersive WebXR support. Both eyes share the same monoscopic panorama; headset translation is intentionally ignored. A supporting headset/browser and secure context are required.
 
+## Local playlist
+
+Choose one or multiple local videos in the file picker. The playlist follows the order returned by your operating system's picker; filenames and file objects remain on this page only. Use **Previous**, **Next**, or the clip dropdown beside the playback controls to move between clips.
+
+The first selected clip opens paused. Manual navigation retains whether playback was playing or paused. Reaching a clip's end advances and plays the next clip; the last clip stops (no loop). Native MAX clips can continue automatically when browser permissions allow. Each non-native clip still requires **View as equirectangular video** confirmation before it is loaded, rather than guessing projection; after confirmation, intended playback resumes. If autoplay is blocked, press Play. A bad/unsupported clip stops with an error; use Next to skip it.
+
+Opening another selection replaces the queue. Explore demo clears the queue. Only the current clip has active decoders/object URL; stale asynchronous loads cannot replace a newer selection. Audio and view preferences carry through navigation. No uploads, playlist persistence or filesystem scanning are added.
+
 ## Preferences when switching videos
 
 Preferences stay in memory for the current page session—no footage, filenames or preferences are uploaded or saved to browser storage.
@@ -39,7 +47,7 @@ Preferences stay in memory for the current page session—no footage, filenames 
 - **Mute and volume** carry over between native MAX, equirectangular clips and the demo. Volume has its own slider; changing it does not silently unmute audio.
 - **Preferred native audio mode** is remembered separately from each clip's available modes. If spatial headphones are unavailable, the clip uses its supported default (normally stereo), without losing the spatial preference; the next compatible clip restores it. Equirectangular playback uses the browser's audio path, not native spatial decoding.
 - **Zoom, viewing direction and the current XR recenter offset** survive file switches and the demo. Only explicit **Reset view** / right-stick click resets zoom and view. Leaving/reentering VR still clears its session-specific recenter offset as documented below.
-- **Video-dependent state resets:** the new clip starts paused at its beginning with fresh decoders, duration, buffering, telemetry stabilization and diagnostics. Retaining an unmuted preference does not auto-play a new clip.
+- **Video-dependent state resets:** the new clip starts at its beginning with fresh decoders, duration, buffering, telemetry stabilization and diagnostics. Initial file selections remain paused; playlist navigation retains play/pause state and end-of-clip advancement resumes playback as described above.
 - A page reload starts fresh (muted, full volume, stereo preference and default view). Retention across reloads is not implemented.
 
 ## Quest controller controls (immersive VR)
@@ -49,9 +57,10 @@ Preferences stay in memory for the current page session—no footage, filenames 
 - **Right controller A:** toggle play/pause once per press (release before pressing again). The button must be released after controller connection or session interruption before it can toggle playback.
 - A stick dead zone and dominant-axis selection reduce drift and accidental seeks while zooming. Controls pause when the XR session loses focus, and controller state resets on disconnect/exit.
 - **Click the right stick:** recenter the current headset viewing orientation and restore default zoom. It uses the live headset pose, including yaw, pitch and roll, as the neutral forward view; subsequent head motion remains tracked relative to that orientation. Look level before clicking if you want to keep the horizon level. One reset per press, with stick-axis actions suppressed while held. The same correction is applied to spatial audio.
-- Trigger/grip, left controller and B are deliberately unassigned. **Trigger + stick turning is deferred.** Look around using the headset as before.
+- **Hold the right lower/side grip trigger and move/rotate the controller:** drag the panorama left/right or up/down, and twist/rotate the controller to correct its roll, yaw or pitch (including tilted videos). Release leaves the adjustment in place. Head tracking stays independent: moving your head alone does not drag the panorama. Press/release does not snap the view. Translation pans at 2 radians/metre in the viewing plane at grab time; forward/back movement is ignored. This reorients a 360° image, not a positional 3D camera. Zoom stays unchanged, and spatial audio follows the same correction. The grip must be released after controller connection or focus interruption before dragging can begin.
+- The upper index trigger, left controller and B are deliberately unassigned. **Trigger + stick turning is deferred.** Look around using the headset as before.
 
-Mappings target Quest Touch's `xr-standard` gamepad (stick axes 2/3, stick-click button 3, A button 4), polled from the XR session, not desktop gamepads. Hand tracking and nonstandard mappings are ignored. [WebXR mapping specification](https://www.w3.org/TR/webxr-gamepads-module-1/) and [Quest Touch profile](https://github.com/immersive-web/webxr-input-profiles/blob/main/packages/registry/profiles/oculus/oculus-touch-v3.json). Automated mock/controller tests do not replace physical Quest testing; zoom comfort, A-button media permissions and native decode/seek responsiveness still need device validation.
+Mappings target Quest Touch's `xr-standard` gamepad (stick axes 2/3, grip/squeeze button 1, stick-click button 3, A button 4), polled from the XR session, not desktop gamepads. Hand tracking and nonstandard mappings are ignored. [WebXR mapping specification](https://www.w3.org/TR/webxr-gamepads-module-1/) and [Quest Touch profile](https://github.com/immersive-web/webxr-input-profiles/blob/main/packages/registry/profiles/oculus/oculus-touch-v3.json). Automated mock/controller tests do not replace physical Quest testing; zoom comfort, A-button media permissions and native decode/seek responsiveness still need device validation.
 
 ## Current limits
 

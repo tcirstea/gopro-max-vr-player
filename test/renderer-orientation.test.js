@@ -103,5 +103,17 @@ test('stick recenter neutralizes full pose, resets zoom, and aligns relative vis
   await renderer.enterVR();windowFrame(100);near(uniforms.xrCenter,identity);
   renderer.setSource(null);await renderer.enterVR();xrFrame(120,frame);near(uniforms.xrCenter,identity);near(orientation,viewRotationMatrix(0,0,pose));
   input.gamepad.buttons[3].pressed=false;xrFrame(140,frame);input.gamepad.buttons[3].pressed=true;xrFrame(160,frame);near(orientation,identity);
+  // Controller movement changes correction; head-only motion keeps normal tracking.
+  input.gripSpace={};let controller=matrix.slice();frame.getPose=space=>{assert.equal(space,input.gripSpace);return {transform:{matrix:controller}};};
+  input.gamepad.buttons[3].pressed=false;input.gamepad.buttons[1].pressed=true;xrFrame(180,frame);near(orientation,identity);const gripFov=uniforms.fov,gripCenter=uniforms.xrCenter.slice();
+  const gripStart=pose;pose=poseFor(quaternionMatrix([.6,.3,-.2,.1]));xrFrame(200,frame);near(uniforms.xrCenter,gripCenter);near(orientation,multiplyMatrix3(gripCenter,viewRotationMatrix(0,0,pose)));
+  controller=poseFor(quaternionMatrix([Math.cos(.2),0,0,Math.sin(.2)]));controller[12]=controller[13]=controller[14]=0;xrFrame(220,frame);
+  assert.notDeepEqual(uniforms.xrCenter,gripCenter);near(orientation,multiplyMatrix3(uniforms.xrCenter,viewRotationMatrix(0,0,pose)));assert.equal(uniforms.fov,gripFov);
+  const draggedCenter=uniforms.xrCenter.slice(),releasedOrientation=orientation.slice();input.gamepad.buttons[1].pressed=false;xrFrame(240,frame);near(orientation,releasedOrientation);near(uniforms.xrCenter,draggedCenter);
+  pose=gripStart;xrFrame(260,frame);near(orientation,multiplyMatrix3(draggedCenter,viewRotationMatrix(0,0,pose)));near(uniforms.xrCenter,draggedCenter);
+  // Recenter while held replaces the controller anchor; moving only the head does not cancel normal tracking.
+  input.gamepad.buttons[1].pressed=true;xrFrame(280,frame);input.gamepad.buttons[3].pressed=true;xrFrame(300,frame);near(orientation,identity);const recentered=uniforms.xrCenter.slice();
+  pose=original;xrFrame(320,frame);near(uniforms.xrCenter,recentered);near(orientation,multiplyMatrix3(recentered,viewRotationMatrix(0,0,pose)));
+
  }finally{for(const key of keys){if(saved[key])Object.defineProperty(globalThis,key,saved[key]);else delete globalThis[key];}}
 });

@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 function harness(native=true){
  const elements=new Map(),seeks=[];let callbacks,played=0,paused=0;
- function element(id){if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,disabled:['play','seek'].includes(id),value:0,checked:true,paused:true,currentTime:0,duration:20,handlers:{},addEventListener(name,fn){this.handlers[name]=fn;},canPlayType(){return '';},async play(){this.paused=false;played++;},pause(){this.paused=true;paused++;},load(){},removeAttribute(){}});return elements.get(id);}
+ function element(id){if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,disabled:['play','seek'].includes(id),value:0,checked:true,paused:true,currentTime:0,duration:20,handlers:{},addEventListener(name,fn){this.handlers[name]=fn;},canPlayType(){return '';},async play(){this.paused=false;played++;},pause(){this.paused=true;paused++;},load(){},removeAttribute(){},replaceChildren(){}});return elements.get(id);}
  const player={setMuted(){},setVolume(){},playing:false,duration:20,close(){},seek(t){seeks.push(t);},async play(){this.playing=true;played++;},pause(){this.playing=false;paused++;}};
  const context=vm.createContext({document:{getElementById:element},window:{addEventListener(){}},URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},createRenderer:()=>({setSource(){},reset(){}}),demoPanorama:()=>({}),formatTime:n=>`${n}`,inspectFile:async()=>({nativeCandidate:native,brand:'test',tracks:[],videoTracks:[{}]}),createNativePlayer:async(file,options)=>{callbacks=options;return player;}});
  const source=readFileSync(new URL('../src/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');vm.runInContext(source,context);

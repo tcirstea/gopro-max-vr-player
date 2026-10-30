@@ -5,3 +5,5 @@
 #volume{width:90px;min-width:60px;flex:none}
 
 .transport{flex-wrap:wrap}.transport #seek{min-width:120px}#volume{accent-color:#b9e28a;vertical-align:middle}
+
+#playlist-select{flex:1;min-width:0;max-width:100%;padding:10px;background:#222b24;color:#eff3ed;border:1px solid #485346;border-radius:7px}#playlist>span{flex-basis:100%;font-size:11px}select:focus-visible{outline:3px solid #c0e992;outline-offset:4px}

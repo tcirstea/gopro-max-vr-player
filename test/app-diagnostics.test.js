@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 test('native diagnostics stay local and source changes clear buffering and diagnostics UI',async()=>{
  const elements=new Map(),downloads=[],revoked=[],timers=[];let callbacks,frameCallback,closed=0;const advanced=[];
- function element(id){if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,value:0,checked:true,handlers:{},addEventListener(name,fn){this.handlers[name]=fn;},canPlayType(){return '';},pause(){},load(){},removeAttribute(){}});return elements.get(id);}
+ function element(id){if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,value:0,checked:true,handlers:{},addEventListener(name,fn){this.handlers[name]=fn;},canPlayType(){return '';},pause(){},load(){},removeAttribute(){},replaceChildren(){}});return elements.get(id);}
  const snapshot={version:1,presentedPairs:4,buffering:true,tracks:[{codec:'hvc1.1.6.L153',decoded:8}]};
  const player={setMuted(){},setVolume(){},advance(time){advanced.push(time);},playing:true,duration:20,close(){closed++;},getDiagnostics(){return snapshot;}};
  const document={getElementById:element,body:{append(){}},createElement(){return {click(){downloads.push({name:this.download,url:this.href});},remove(){}};}};

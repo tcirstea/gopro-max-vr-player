@@ -63,3 +63,14 @@ test('stick click recenters once, suppresses axes while held, and rearms on rele
  controls.reset();controls.update(h.session,1080);assert.equal(recenters,2,'held on session entry must not recenter');
  h.session.inputSources=[];controls.update(h.session,1100);h.session.inputSources=[h.input];controls.update(h.session,1120);assert.equal(recenters,2,'held on reconnect must not recenter');
 });
+test('grip rising/release edges clutch once, ignore held entry, and preserve zoom and A',()=>{
+ const h=harness(),drag=[],sources=[];const controls=createXRControls({zoom:v=>h.zoom.push(v),seek:v=>h.seek.push(v),togglePlayback:()=>h.toggles.push(true),dragView:(v,source)=>{drag.push(v);if(v)sources.push(source);}});
+ h.input.gamepad.buttons[1].pressed=true;controls.update(h.session,0);controls.update(h.session,20);assert.deepEqual(drag,[]);
+ h.input.gamepad.buttons[1].pressed=false;controls.update(h.session,40);h.input.gamepad.buttons[1].pressed=true;controls.update(h.session,60);controls.update(h.session,80);assert.deepEqual(drag,[true]);assert.equal(sources[0],h.input);
+ h.input.gamepad.axes[3]=-1;h.input.gamepad.buttons[4].pressed=true;controls.update(h.session,100);assert.equal(h.zoom.at(-1),-12);assert.equal(h.toggles.length,1);
+ h.input.gamepad.buttons[1].pressed=false;controls.update(h.session,120);controls.update(h.session,140);assert.deepEqual(drag,[true,false]);
+ h.input.gamepad.buttons[1].pressed=true;controls.update(h.session,160);h.session.visibilityState='hidden';controls.update(h.session,180);assert.deepEqual(drag,[true,false,true,false]);
+ h.session.visibilityState='visible';controls.update(h.session,200);assert.equal(drag.length,4,'held on focus recovery ignored');
+ h.input.gamepad.buttons[1].pressed=false;controls.update(h.session,220);h.input.gamepad.buttons[1].pressed=true;controls.update(h.session,240);h.session.inputSources=[];controls.update(h.session,260);assert.deepEqual(drag,[true,false,true,false,true,false]);
+ h.session.inputSources=[h.input];controls.update(h.session,280);assert.equal(drag.length,6,'held on reconnect ignored');
+});

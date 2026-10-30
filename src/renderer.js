@@ -1,3 +1,4 @@
+import {createXRViewDrag} from './xr-view-drag.js';
 import {createXRControls,zoomFov} from './xr-controls.js';
 import {maxLayout,MAX_GLSL} from './max-projection.js';
 import {IDENTITY_QUATERNION,quaternionMatrix,multiplyMatrix3,viewRotationMatrix,inverseViewRotation} from './quaternion.js';
@@ -26,13 +27,14 @@ export function createRenderer(canvas) {
   let stabilization=quaternionMatrix(IDENTITY_QUATERNION),orientationCallback=null,frameCallback=null,lastView=quaternionMatrix(IDENTITY_QUATERNION);
   let xrTransition=null;
   let xrCenter=quaternionMatrix(IDENTITY_QUATERNION),pendingRecenter=false;
-  const xrControls=createXRControls({zoom:delta=>{fov=zoomFov(fov,delta);},seek:seconds=>canvas.dispatchEvent(new CustomEvent('xrseek',{detail:seconds})),togglePlayback:()=>canvas.dispatchEvent(new Event('xrtoggleplay')),recenter:()=>{pendingRecenter=true;}});
+  const viewDrag=createXRViewDrag();let dragSource=null;
+  const xrControls=createXRControls({zoom:delta=>{fov=zoomFov(fov,delta);},seek:seconds=>canvas.dispatchEvent(new CustomEvent('xrseek',{detail:seconds})),togglePlayback:()=>canvas.dispatchEvent(new Event('xrtoggleplay')),recenter:()=>{pendingRecenter=true;},dragView:(active,input)=>{dragSource=active?input:null;viewDrag.setActive(active);}});
   function reportView(pose=null){const view=pose?multiplyMatrix3(viewRotationMatrix(yaw,0),multiplyMatrix3(xrCenter,viewRotationMatrix(0,0,pose))):viewRotationMatrix(yaw,pitch);lastView=multiplyMatrix3(stabilization,view);orientationCallback?.(lastView.slice());}
   function upload(s,i){gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,textures[i]);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,s);}
   function uploadSource(){if(source&&(dirty||(source.tagName==='VIDEO'&&!source.paused))&&(source.tagName!=='VIDEO'||source.readyState>=2)){try{upload(source,0);}catch(error){source=null;canvas.dispatchEvent(new CustomEvent('rendererror',{detail:error.message}));}}dirty=false;}
   function render(w,h,xr=false){for(const [n,v]of Object.entries({aspect:w/Math.max(1,h),yaw,pitch,fov,mode,xr:xr?1:0}))gl.uniform1f(loc(n),v);gl.uniformMatrix3fv(loc('stabilization'),false,stabilization);gl.uniformMatrix3fv(loc('xrCenter'),false,xrCenter);gl.drawArrays(gl.TRIANGLES,0,6);}
   function draw(time){requestAnimationFrame(draw);if(gl.isContextLost()||session)return;frameCallback?.(time);uploadSource();reportView();const scale=Math.min(globalThis.devicePixelRatio||1,2),w=Math.max(1,Math.round(canvas.clientWidth*scale)),h=Math.max(1,Math.round(canvas.clientHeight*scale));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,w,h);render(w,h);}
-  function xrDraw(time,frame){if(!session||(frame.session&&frame.session!==session))return;session.requestAnimationFrame(xrDraw);xrControls.update(session,time);const pose=frame.getViewerPose(referenceSpace);if(!pose)return;if(pendingRecenter){xrCenter=inverseViewRotation(pose.transform.matrix);yaw=0;pitch=0;fov=Math.PI/2;pendingRecenter=false;}frameCallback?.(time);uploadSource();reportView(pose.transform.matrix);const layer=session.renderState.baseLayer;gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);gl.clear(gl.COLOR_BUFFER_BIT);for(const view of pose.views){const v=layer.getViewport(view);gl.viewport(v.x,v.y,v.width,v.height);gl.uniformMatrix4fv(loc('invProjection'),false,invert4(view.projectionMatrix));gl.uniformMatrix4fv(loc('viewRotation'),false,view.transform.matrix);render(v.width,v.height,true);}}
+  function xrDraw(time,frame){if(!session||(frame.session&&frame.session!==session))return;session.requestAnimationFrame(xrDraw);xrControls.update(session,time);const pose=frame.getViewerPose(referenceSpace);if(!pose){viewDrag.rebase();return;}if(pendingRecenter){xrCenter=inverseViewRotation(pose.transform.matrix);yaw=0;pitch=0;fov=Math.PI/2;pendingRecenter=false;viewDrag.rebase();}const dragSpace=dragSource?.gripSpace||dragSource?.targetRaySpace;const controllerPose=dragSpace?frame.getPose?.(dragSpace,referenceSpace):null;xrCenter=viewDrag.update(xrCenter,pose.transform.matrix,controllerPose?.transform.matrix);frameCallback?.(time);uploadSource();reportView(pose.transform.matrix);const layer=session.renderState.baseLayer;gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);gl.clear(gl.COLOR_BUFFER_BIT);for(const view of pose.views){const v=layer.getViewport(view);gl.viewport(v.x,v.y,v.width,v.height);gl.uniformMatrix4fv(loc('invProjection'),false,invert4(view.projectionMatrix));gl.uniformMatrix4fv(loc('viewRotation'),false,view.transform.matrix);render(v.width,v.height,true);}}
   canvas.addEventListener('pointerdown',e=>{canvas.focus();canvas.setPointerCapture(e.pointerId);lastPointer=[e.clientX,e.clientY];});
   canvas.addEventListener('pointermove',e=>{if(!lastPointer)return;yaw+=(e.clientX-lastPointer[0])*.004;pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.clientY-lastPointer[1])*.004));lastPointer=[e.clientX,e.clientY];});
   for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,()=>lastPointer=null);
@@ -63,7 +65,7 @@ export function createRenderer(canvas) {
         next.addEventListener('end',()=>{
           ended=true;
           if(session!==next)return;
-          xrControls.reset();pendingRecenter=false;xrCenter=quaternionMatrix(IDENTITY_QUATERNION);
+          xrControls.reset();viewDrag.reset();dragSource=null;pendingRecenter=false;xrCenter=quaternionMatrix(IDENTITY_QUATERNION);
           session=null;referenceSpace=null;canvas.dispatchEvent(new Event('vrend'));
         });
         try{
@@ -72,8 +74,8 @@ export function createRenderer(canvas) {
           const ref=await next.requestReferenceSpace('local');
           if(ended)return;
           next.updateRenderState({baseLayer:new XRWebGLLayer(next,gl)});
-          referenceSpace=ref;session=next;xrCenter=quaternionMatrix(IDENTITY_QUATERNION);pendingRecenter=false;xrControls.reset();
-          next.addEventListener('visibilitychange',()=>{if(session===next){xrControls.reset();pendingRecenter=false;}});
+          referenceSpace=ref;session=next;xrCenter=quaternionMatrix(IDENTITY_QUATERNION);pendingRecenter=false;xrControls.reset();viewDrag.reset();dragSource=null;
+          next.addEventListener('visibilitychange',()=>{if(session===next){xrControls.reset();viewDrag.reset();dragSource=null;pendingRecenter=false;}});
           next.requestAnimationFrame(xrDraw);
         }catch(error){
           // Preserve the original setup error even if runtime cleanup also fails.
