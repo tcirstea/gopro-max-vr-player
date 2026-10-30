@@ -4,18 +4,22 @@ export const DEFAULT_FOV = Math.PI / 2;
 export function zoomFov(fov, wheelDelta) {
   return Math.max(.4, Math.min(2.1, fov + wheelDelta * .001));
 }
-export function createXRControls({zoom, seek, togglePlayback}) {
-  let source=null, lastTime=null, pressed=false, direction=0, repeatAt=0;
-  function reset(){source=null;lastTime=null;pressed=false;direction=0;repeatAt=0;}
+export function createXRControls({zoom, seek, togglePlayback, recenter=()=>{}}) {
+  let source=null, lastTime=null, pressed=false, stickPressed=false, direction=0, repeatAt=0;
+  function reset(){source=null;lastTime=null;pressed=false;stickPressed=false;direction=0;repeatAt=0;}
   return {reset, update(session,time){
     if(session.visibilityState && session.visibilityState!=='visible'){reset();return;}
     const next=Array.from(session.inputSources||[]).find(s=>s.handedness==='right' && !s.hand && s.gamepad?.mapping==='xr-standard' && s.gamepad.connected!==false);
     if(!next){reset();return;}
     const pad=next.gamepad;
-    if(next!==source){reset();source=next;pressed=!!pad.buttons?.[4]?.pressed;}
+    if(next!==source){reset();source=next;pressed=!!pad.buttons?.[4]?.pressed;stickPressed=!!pad.buttons?.[3]?.pressed;}
     const dt=lastTime===null?0:Math.max(0,Math.min(.05,(time-lastTime)/1000));lastTime=time;
     const axis=i=>Number.isFinite(pad.axes?.[i])?Math.max(-1,Math.min(1,pad.axes[i])):0;
-    const x=axis(2),y=axis(3);
+    const stickDown=!!pad.buttons?.[3]?.pressed;
+    if(stickDown&&!stickPressed)recenter();
+    stickPressed=stickDown;
+    // Clicking the stick must not also seek or immediately undo the zoom reset.
+    const x=stickDown?0:axis(2),y=stickDown?0:axis(3);
     // Dominant-axis lock prevents a small diagonal wobble from seeking while zooming.
     const vertical=Math.abs(y)>.2 && Math.abs(y)>=Math.abs(x);
     if(vertical)zoom(Math.sign(y)*(Math.abs(y)-.2)/.8*600*dt);

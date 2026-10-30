@@ -18,3 +18,9 @@ export function viewRotationMatrix(yaw,pitch,pose=null){
  const p=pose?new Float32Array([pose[0],pose[1],pose[2],pose[4],pose[5],pose[6],pose[8],pose[9],pose[10]]):quaternionMatrix([Math.cos(pitch/2),Math.sin(pitch/2),0,0]);
  return multiplyMatrix3(y,p);
 }
+
+// Inverse of the headset's rigid rotation (translation intentionally ignored).
+// Anchors the current full viewing orientation as the panorama's neutral forward.
+export function inverseViewRotation(pose){
+ return new Float32Array([pose[0],pose[4],pose[8],pose[1],pose[5],pose[9],pose[2],pose[6],pose[10]]);
+}

@@ -62,5 +62,6 @@ $('demo').addEventListener('click',()=>{++generation;clearMedia();renderer?.rese
 $('reset').addEventListener('click',()=>renderer?.reset());
 $('fullscreen').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await $('viewer').requestFullscreen();}catch{status('Full screen is unavailable in this browser or embedded context.');}});
 $('canvas').addEventListener('webglcontextlost',e=>{e.preventDefault();nativePlayer?.pause();video.pause();status('Graphics context lost. Reload this page to restore the viewer.');});
+$('canvas').addEventListener('xrerror',e=>status(`VR unavailable: ${e.detail} Close any existing immersive session in your headset or another tab, then try Enter VR again. Desktop playback is still available.`));
 $('canvas').addEventListener('rendererror',e=>status(`Video texture unavailable: ${e.detail}`));
 window.addEventListener('pagehide',()=>{nativePlayer?.close();if(objectURL)URL.revokeObjectURL(objectURL);});

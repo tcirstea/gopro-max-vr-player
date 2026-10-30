@@ -98,3 +98,21 @@ Automated tests cover dead zones/dominant axis, directions, frame-time clamping,
 A local headless Chromium smoke test was attempted but did not run: sandbox sockets were denied; the approved escalation then failed while constructing the environment (`bwrap: Can't create file at /home/agent/.codex/sessions: Read-only file system`). No physical Quest hardware is available to this task. Therefore real headset button permissions, visual zoom/comfort, native seek responsiveness and reentry remain **not physically verified**.
 
 Manual Quest check: load a clip and enter VR; push right stick forward/back to zoom; left/right should seek 5 seconds per nudge and repeat at most twice per second when held; press/release A to pause/resume (holding must not repeat). Repeat with native MAX and equirectangular clips, paused and playing, near both ends. Verify head tracking, desktop wheel/reset after exit, controller disconnect/reconnect, and headset menu interruption. Trigger/grip must remain unassigned.
+
+
+### Right-stick click recenter follow-up — 2026-10-30
+
+Right-stick click (xr-standard button 3) now recenters the current full headset orientation and restores default zoom. The inverse rotation is calculated from the current valid XR viewer pose, not desktop yaw; it is applied equally to per-eye panorama sampling and head-relative audio orientation, before source stabilization. Translation remains ignored. Look level before clicking to retain a level horizon. Tracking after reset is relative to that reference. The correction is cleared when exiting/reentering VR.
+
+Stick click is edge-triggered and must be released after connection/interruption; holding it does not continually lock the view. Stick-axis zoom/seek is suppressed while clicked. If the current pose is unavailable, recenter waits for the next valid pose; session exit or focus interruption cancels the pending request. Desktop Reset retains its original behavior, while Reset during VR also recenters against the next valid pose.
+
+Physical Quest validation remains unavailable; this is automated/mock verification, not a device-validation claim. Manual check: turn your head away from the initial forward view, change zoom, click the right stick, verify default forward/zoom and that subsequent head motion still works; hold the click and move your head to ensure it does not keep resetting; release/repeat; check interruption and VR exit/reentry. Confirm A and left/right seek still work and spatial audio follows the recentered view.
+
+## Immersive session transition regression
+
+- Serialized Enter/Exit VR operations across requestSession, graphics setup, reference-space setup, and session exit; rapid clicks cannot issue a second immersive request. The button is disabled until the transition settles.
+- Registered the session-end handler before asynchronous graphics setup so a headset ending entry cannot resurrect a dead session. Late frames from old sessions are ignored.
+- Setup errors attempt to end the acquired session while preserving the original diagnostic. VR errors use a separate status channel rather than “Video texture unavailable”; desktop rendering remains available after a rejected request.
+- Automated regression coverage checks rapid clicks/API calls, delayed graphics setup, repeated exit, external active-session rejection, retry, early session end, failed setup/cleanup, and app error labeling. Real PC Edge/headset session behavior still requires device verification.
+
+Combined recenter/session follow-up verification: **128/128 Node tests passed**, plus syntax checks for every source and test JavaScript file. No physical Quest or PC Edge headset test was performed in this environment.

@@ -27,3 +27,10 @@ test('XR transport reports decoder/play failures without an unhandled rejection'
  const h=harness();await h.context.openFile({name:'test.360',size:100});h.player.play=async()=>{throw Error('autoplay');};await h.toggle();assert.match(h.element('status').textContent,/Playback blocked: autoplay/);
  h.player.seek=()=>{throw Error('decoder');};h.seek(5);assert.match(h.element('status').textContent,/Seeking failed: decoder/);
 });
+
+test('VR session errors are not mislabeled as unavailable video textures',()=>{
+ const h=harness();h.element('canvas').handlers.xrerror({detail:'There is already an active, immersive XRSession.'});
+ assert.match(h.element('status').textContent,/^VR unavailable:/);
+ assert.match(h.element('status').textContent,/Desktop playback is still available/);
+ assert.doesNotMatch(h.element('status').textContent,/Video texture unavailable/);
+});
