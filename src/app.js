@@ -15,7 +15,7 @@ function applyNativePreferences(player){
  syncAudioPreferences();
 }
 
-let renderer,objectURL=null,generation=0,pendingFile=null,nativePlayer=null,nativeTime=0;
+let renderer,objectURL=null,generation=0,pendingFile=null,nativePlayer=null,nativeTime=0,nativeAdvancing=false;
 let playlist=[],playlistIndex=-1,playWhenReady=false;
 function syncPlaylist(){
  $('previous').disabled=playlistIndex<=0;
@@ -53,9 +53,31 @@ syncPlaylist();
 const status=message=>$('status').textContent=message;
 function playbackStatus(message){const element=$('playback-state');if(element.textContent!==message)element.textContent=message;element.hidden=!message;}
 try{renderer=createRenderer($('canvas'));renderer.setSource(demoPanorama());renderer.onBeforeRender?.(time=>nativePlayer?.advance(time));renderer.onViewOrientation?.(rotation=>nativePlayer?.setViewRotation(rotation));}catch(error){status(error.message);}
+// Read live transport state each XR frame; buffering must not consume the
+// panel's two seconds of actual playback. The provider also works in demo mode.
+renderer?.onXRPanelState?.(()=>({
+ mediaId:generation,playing:nativePlayer?nativePlayer.playing:!!objectURL&&!video.paused&&!video.ended,
+ advancing:nativePlayer?nativeAdvancing:!!objectURL&&!video.paused&&!video.ended&&!video.seeking&&video.readyState>=3,
+ currentTime:nativePlayer?nativeTime:video.currentTime,duration:nativePlayer?nativePlayer.duration:video.duration,
+ canPlay:!$('play').disabled,canSeek:!$('seek').disabled,
+ canPrevious:!$('previous').disabled,canNext:!$('next').disabled
+}));
+$('canvas').addEventListener('xrpanelaction',event=>{
+ const {action,value}=event.detail||{};
+ if(action==='play')togglePlayback();
+ else if(action==='previous')selectClip(playlistIndex-1);
+ else if(action==='next')selectClip(playlistIndex+1);
+ else if(action==='seek'&&!$('seek').disabled&&Number.isFinite(value)){
+  const duration=nativePlayer?nativePlayer.duration:video.duration;
+  if(!Number.isFinite(duration)||duration<=0)return;
+  const target=Math.max(0,Math.min(1,value))*duration;
+  try{if(nativePlayer){nativePlayer.seek(target);nativeTime=target;}else video.currentTime=target;}
+  catch(error){status(`Seeking failed: ${error.message}`);}
+ }
+});
 const hasHEVC=video.canPlayType('video/mp4; codecs="hvc1.1.6.L153.B0"');
 $('capabilities').textContent=`This browser: WebGL ${renderer?'available':'unavailable'} · WebCodecs ${'VideoDecoder' in window?'available':'unavailable'} · HEVC media hint: ${hasHEVC||'not reported'}. These hints do not validate native MAX playback.`;
-function clearMedia(){nativeTime=0;nativePlayer?.close();nativePlayer=null;$('diagnostics-panel').hidden=true;playbackStatus('');$('play').textContent='Play';$('muted').disabled=false;$('audio-mode').hidden=true;syncAudioPreferences();video.pause();video.removeAttribute('src');video.load();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=null;pendingFile=null;$('play').disabled=true;$('seek').disabled=true;$('seek').value=0;$('time').textContent='0:00 / 0:00';$('equirect').hidden=true;renderer?.setSource(demoPanorama());$('source').textContent='DEMO PANORAMA';$('view-title').textContent='Take a look around';}
+function clearMedia(){nativeTime=0;nativeAdvancing=false;nativePlayer?.close();nativePlayer=null;$('diagnostics-panel').hidden=true;playbackStatus('');$('play').textContent='Play';$('muted').disabled=false;$('audio-mode').hidden=true;syncAudioPreferences();video.pause();video.removeAttribute('src');video.load();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=null;pendingFile=null;$('play').disabled=true;$('seek').disabled=true;$('seek').value=0;$('time').textContent='0:00 / 0:00';$('equirect').hidden=true;renderer?.setSource(demoPanorama());$('source').textContent='DEMO PANORAMA';$('view-title').textContent='Take a look around';}
 async function openFile(file){
  const current=++generation;let ended=false;clearMedia();$('filename').textContent=file.name;$('metadata').textContent='';status('Inspecting local container metadata…');
  try{const info=await inspectFile(file);if(current!==generation)return;
@@ -65,7 +87,7 @@ async function openFile(file){
   status('Native dual-track candidate detected. Checking HEVC decoders and loading paired frames locally…');
   const player=await createNativePlayer(file,{autoTick:false,
    onFrames(a,b,options){if(current!==generation)return;renderer.setMaxSources(a,b,options);$('source').textContent='LOCAL MAX · EXPERIMENTAL EAC';$('view-title').textContent='Your point of view';},
-   onState(state){if(current!==generation)return;nativeTime=state.currentTime;playbackStatus(state.preparing?(state.inputStrategy==='chunked-prefetch'?'Preparing 64 MiB playback buffers in local memory…':'Preparing this short clip in local memory…'):state.buffering?'Buffering paired video frames… Playback time is held until frames are ready.':state.playing?`Playing locally · ${state.audio?.available?(state.audio.mode==='ambisonic'?'Head-relative ambisonic headphones':state.audio.mode+' audio'):'Audio unavailable on this browser'}.`:'');$('play').textContent=state.playing?'Pause':'Play';$('time').textContent=`${formatTime(state.currentTime)} / ${formatTime(state.duration)}`;$('seek').value=state.currentTime/state.duration*1000;if(state.audio){$('muted').disabled=!state.audio.available;$('audio-mode').hidden=state.audio.modes.length<2;$('audio-mode').value=state.audio.mode;}if(!state.playing&&state.duration>0&&state.currentTime>=state.duration&&!ended){ended=true;advancePlaylist(current);}},
+   onState(state){if(current!==generation)return;nativeTime=state.currentTime;nativeAdvancing=state.playing&&!state.buffering&&!state.preparing;playbackStatus(state.preparing?(state.inputStrategy==='chunked-prefetch'?'Preparing 64 MiB playback buffers in local memory…':'Preparing this short clip in local memory…'):state.buffering?'Buffering paired video frames… Playback time is held until frames are ready.':state.playing?`Playing locally · ${state.audio?.available?(state.audio.mode==='ambisonic'?'Head-relative ambisonic headphones':state.audio.mode+' audio'):'Audio unavailable on this browser'}.`:'');$('play').textContent=state.playing?'Pause':'Play';$('time').textContent=`${formatTime(state.currentTime)} / ${formatTime(state.duration)}`;$('seek').value=state.currentTime/state.duration*1000;if(state.audio){$('muted').disabled=!state.audio.available;$('audio-mode').hidden=state.audio.modes.length<2;$('audio-mode').value=state.audio.mode;}if(!state.playing&&state.duration>0&&state.currentTime>=state.duration&&!ended){ended=true;advancePlaylist(current);}},
    onError(error){if(current===generation){playbackStatus('');$('play').disabled=true;$('seek').disabled=true;playWhenReady=false;status(`Native decoder stopped: ${error.message}. Use Next to skip this clip.`);}}
   });
   if(current!==generation){player.close();return;}nativePlayer=player;$('diagnostics-panel').hidden=false;$('play').disabled=false;$('seek').disabled=false;applyNativePreferences(player);$('muted').disabled=!player.audioState?.available;$('audio-mode').hidden=(player.audioState?.modes.length||0)<2;$('audio-mode').value=player.audioState?.mode||'stereo';
