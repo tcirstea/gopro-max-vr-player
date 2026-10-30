@@ -32,6 +32,16 @@ For an exported, already-stitched video, select **View as equirectangular video*
 
 **Enter VR** is enabled only if the browser reports immersive WebXR support. Both eyes share the same monoscopic panorama; headset translation is intentionally ignored. A supporting headset/browser and secure context are required.
 
+## Quest controller controls (immersive VR)
+
+- **Right stick forward/back:** zoom in/out, using the same bounded FOV adjustment as the desktop scroll wheel. In VR this scales the panorama rays in eye space, before head rotation; it does not change the headset's optical projection or tracking. Default zoom is unchanged. Reset view restores default zoom.
+- **Right stick right/left:** jump forward/back **5 seconds**; holding repeats every **500 ms**. Seeking works with native MAX and equirectangular video, including while paused, and clamps at the clip boundaries.
+- **Right controller A:** toggle play/pause once per press (release before pressing again). The button must be released after controller connection or session interruption before it can toggle playback.
+- A stick dead zone and dominant-axis selection reduce drift and accidental seeks while zooming. Controls pause when the XR session loses focus, and controller state resets on disconnect/exit.
+- Trigger/grip, left controller, B and stick-click are deliberately unassigned. **Trigger + stick turning is deferred.** Look around using the headset as before.
+
+Mappings target Quest Touch's `xr-standard` gamepad (stick axes 2/3, A button 4), polled from the XR session, not desktop gamepads. Hand tracking and nonstandard mappings are ignored. [WebXR mapping specification](https://www.w3.org/TR/webxr-gamepads-module-1/) and [Quest Touch profile](https://github.com/immersive-web/webxr-input-profiles/blob/main/packages/registry/profiles/oculus/oculus-touch-v3.json). Automated mock/controller tests do not replace physical Quest testing; zoom comfort, A-button media permissions and native decode/seek responsiveness still need device validation.
+
 ## Current limits
 
 - **Unverified end-to-end native playback:** real WebCodecs decode, GPU rendering, full-resolution performance, browser seeking and headset sessions still need testing on target devices.

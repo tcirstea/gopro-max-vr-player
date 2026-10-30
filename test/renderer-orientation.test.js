@@ -45,3 +45,25 @@ test('active window/XR frame loop advances media before drawing without duplicat
   unsubscribe();windowFrame(60);assert.deepEqual(advance,[10,30,40,50]);
  }finally{for(const key of keys){if(saved[key])Object.defineProperty(globalThis,key,saved[key]);else delete globalThis[key];}}
 });
+test('XR controller zoom reaches shader FOV and transport events while desktop wheel stays equivalent',async()=>{
+ const keys=['requestAnimationFrame','document','navigator','XRWebGLLayer'];
+ const saved=Object.fromEntries(keys.map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+ const events={},sessionEvents={},uniforms={},dispatched=[];let windowFrame,xrFrame,fragment;
+ const gl=new Proxy({getShaderParameter:()=>true,getProgramParameter:()=>true,getParameter:()=>8192,isContextLost:()=>false,getUniformLocation:(_p,name)=>name,uniform1f:(name,value)=>uniforms[name]=value,shaderSource:(_s,source)=>{if(source.includes('eyeRay'))fragment=source;}},{get:(target,key)=>key in target?target[key]:/^[A-Z_0-9]+$/.test(key)?1:()=>({})});
+ const canvas={clientWidth:400,clientHeight:300,getContext:()=>gl,addEventListener:(name,cb)=>events[name]=cb,dispatchEvent(event){dispatched.push(event);events[event.type]?.(event);}};
+ const input={handedness:'right',gamepad:{mapping:'xr-standard',axes:[0,0,0,0],buttons:Array.from({length:5},()=>({pressed:false}))}};
+ const session={visibilityState:'visible',inputSources:[input],renderState:{},async requestReferenceSpace(){return {};},updateRenderState(state){Object.assign(this.renderState,state);},addEventListener(name,cb){sessionEvents[name]=cb;},requestAnimationFrame(cb){xrFrame=cb;return 1;},async end(){sessionEvents.end?.();}};
+ const globals={requestAnimationFrame:cb=>{windowFrame=cb;return 1;},document:{getElementById:()=>null},navigator:{xr:{async requestSession(){return session;}}},XRWebGLLayer:class{getViewport(){return {x:0,y:0,width:400,height:300};}}};
+ for(const [key,value] of Object.entries(globals))Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});
+ try{
+  const renderer=createRenderer(canvas);const matrix=[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];
+  const frame={getViewerPose:()=>({transform:{matrix},views:[{projectionMatrix:matrix,transform:{matrix}}]})};
+  events.wheel({deltaY:-12,preventDefault(){}});windowFrame(0);const wheelFov=uniforms.fov;
+  renderer.reset();await renderer.enterVR();xrFrame(0,frame);input.gamepad.axes[3]=-1;xrFrame(20,frame);
+  assert.equal(uniforms.fov,wheelFov);assert.match(fragment,/eyeRay\.xy\*=tan\(fov\/2\.\)/);
+  input.gamepad.axes=[0,0,1,0];xrFrame(30,frame);assert.equal(dispatched.at(-1).type,'xrseek');assert.equal(dispatched.at(-1).detail,5);
+  input.gamepad.buttons[4].pressed=true;xrFrame(40,frame);assert.equal(dispatched.at(-1).type,'xrtoggleplay');
+  await renderer.enterVR();const count=dispatched.length;windowFrame(50);assert.equal(dispatched.length,count);
+  await renderer.enterVR();xrFrame(60,frame);assert.equal(dispatched.filter(e=>e.type==='xrtoggleplay').length,1,'held button does not toggle on reentry');
+ }finally{for(const key of keys){if(saved[key])Object.defineProperty(globalThis,key,saved[key]);else delete globalThis[key];}}
+});

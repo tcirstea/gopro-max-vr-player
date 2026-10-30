@@ -1,3 +1,4 @@
+import {createXRControls,zoomFov} from './xr-controls.js';
 import {maxLayout,MAX_GLSL} from './max-projection.js';
 import {IDENTITY_QUATERNION,quaternionMatrix,multiplyMatrix3,viewRotationMatrix} from './quaternion.js';
 export function createRenderer(canvas) {
@@ -7,7 +8,7 @@ export function createRenderer(canvas) {
   const fragment=`precision highp float; varying vec2 uv; uniform sampler2D panorama; uniform float aspect,yaw,pitch,fov,mode,xr;uniform mat4 invProjection,viewRotation;uniform mat3 stabilization;
   ${MAX_GLSL}
   void main(){vec3 d;
-  if(xr>.5){d=normalize(mat3(viewRotation)*(invProjection*vec4(uv,-1.,1.)).xyz);}
+  if(xr>.5){vec3 eyeRay=(invProjection*vec4(uv,-1.,1.)).xyz;eyeRay.xy*=tan(fov/2.);d=normalize(mat3(viewRotation)*eyeRay);}
   else {d=normalize(vec3(uv.x*aspect*tan(fov/2.),uv.y*tan(fov/2.),-1.));d=vec3(d.x,d.y*cos(pitch)-d.z*sin(pitch),d.y*sin(pitch)+d.z*cos(pitch));}
   d=vec3(d.x*cos(yaw)+d.z*sin(yaw),d.y,-d.x*sin(yaw)+d.z*cos(yaw));
   d=stabilization*d;
@@ -23,16 +24,17 @@ export function createRenderer(canvas) {
   gl.uniform1i(loc('panorama'),0);gl.uniform1i(loc('trackOne'),1);
   let source=null,dirty=true,yaw=0,pitch=0,fov=Math.PI/2,lastPointer=null,mode=0,session=null,referenceSpace=null;
   let stabilization=quaternionMatrix(IDENTITY_QUATERNION),orientationCallback=null,frameCallback=null,lastView=quaternionMatrix(IDENTITY_QUATERNION);
+  const xrControls=createXRControls({zoom:delta=>{fov=zoomFov(fov,delta);},seek:seconds=>canvas.dispatchEvent(new CustomEvent('xrseek',{detail:seconds})),togglePlayback:()=>canvas.dispatchEvent(new Event('xrtoggleplay'))});
   function reportView(pose=null){lastView=multiplyMatrix3(stabilization,viewRotationMatrix(yaw,pitch,pose));orientationCallback?.(lastView.slice());}
   function upload(s,i){gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,textures[i]);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,s);}
   function uploadSource(){if(source&&(dirty||(source.tagName==='VIDEO'&&!source.paused))&&(source.tagName!=='VIDEO'||source.readyState>=2)){try{upload(source,0);}catch(error){source=null;canvas.dispatchEvent(new CustomEvent('rendererror',{detail:error.message}));}}dirty=false;}
   function render(w,h,xr=false){for(const [n,v]of Object.entries({aspect:w/Math.max(1,h),yaw,pitch,fov,mode,xr:xr?1:0}))gl.uniform1f(loc(n),v);gl.uniformMatrix3fv(loc('stabilization'),false,stabilization);gl.drawArrays(gl.TRIANGLES,0,6);}
   function draw(time){requestAnimationFrame(draw);if(gl.isContextLost()||session)return;frameCallback?.(time);uploadSource();reportView();const scale=Math.min(globalThis.devicePixelRatio||1,2),w=Math.max(1,Math.round(canvas.clientWidth*scale)),h=Math.max(1,Math.round(canvas.clientHeight*scale));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,w,h);render(w,h);}
-  function xrDraw(time,frame){if(!session)return;session.requestAnimationFrame(xrDraw);const pose=frame.getViewerPose(referenceSpace);if(!pose)return;frameCallback?.(time);uploadSource();reportView(pose.transform.matrix);const layer=session.renderState.baseLayer;gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);gl.clear(gl.COLOR_BUFFER_BIT);for(const view of pose.views){const v=layer.getViewport(view);gl.viewport(v.x,v.y,v.width,v.height);gl.uniformMatrix4fv(loc('invProjection'),false,invert4(view.projectionMatrix));gl.uniformMatrix4fv(loc('viewRotation'),false,view.transform.matrix);render(v.width,v.height,true);}}
+  function xrDraw(time,frame){if(!session)return;session.requestAnimationFrame(xrDraw);xrControls.update(session,time);const pose=frame.getViewerPose(referenceSpace);if(!pose)return;frameCallback?.(time);uploadSource();reportView(pose.transform.matrix);const layer=session.renderState.baseLayer;gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);gl.clear(gl.COLOR_BUFFER_BIT);for(const view of pose.views){const v=layer.getViewport(view);gl.viewport(v.x,v.y,v.width,v.height);gl.uniformMatrix4fv(loc('invProjection'),false,invert4(view.projectionMatrix));gl.uniformMatrix4fv(loc('viewRotation'),false,view.transform.matrix);render(v.width,v.height,true);}}
   canvas.addEventListener('pointerdown',e=>{canvas.focus();canvas.setPointerCapture(e.pointerId);lastPointer=[e.clientX,e.clientY];});
   canvas.addEventListener('pointermove',e=>{if(!lastPointer)return;yaw+=(e.clientX-lastPointer[0])*.004;pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.clientY-lastPointer[1])*.004));lastPointer=[e.clientX,e.clientY];});
   for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,()=>lastPointer=null);
-  canvas.addEventListener('wheel',e=>{e.preventDefault();fov=Math.max(.4,Math.min(2.1,fov+e.deltaY*.001));},{passive:false});
+  canvas.addEventListener('wheel',e=>{e.preventDefault();fov=zoomFov(fov,e.deltaY);},{passive:false});
   canvas.addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','+','=','-'].includes(e.key))return;e.preventDefault();yaw+=e.key==='ArrowLeft'?.1:e.key==='ArrowRight'?-.1:0;pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.key==='ArrowUp'?.1:e.key==='ArrowDown'?-.1:0)));fov=Math.max(.4,Math.min(2.1,fov+(e.key==='-'?.1:['+','='].includes(e.key)?-.1:0)));});
   canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();canvas.dispatchEvent(new CustomEvent('rendererror',{detail:'Graphics context lost. Reload the player to restore playback.'}));});
   requestAnimationFrame(draw);
@@ -47,7 +49,7 @@ export function createRenderer(canvas) {
     onViewOrientation(callback){orientationCallback=callback;return ()=>{if(orientationCallback===callback)orientationCallback=null;};},
     getViewOrientation(){return lastView.slice();},
     refresh(){dirty=true;},reset(){yaw=0;pitch=0;fov=Math.PI/2;},
-    async enterVR(){if(session){await session.end();return;}if(!navigator.xr)throw new Error('Immersive WebXR is unavailable. Use a supported headset browser over HTTPS or localhost.');const next=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor']});try{await gl.makeXRCompatible();const ref=await next.requestReferenceSpace('local');next.updateRenderState({baseLayer:new XRWebGLLayer(next,gl)});referenceSpace=ref;session=next;next.addEventListener('end',()=>{session=null;canvas.dispatchEvent(new Event('vrend'));});next.requestAnimationFrame(xrDraw);}catch(e){await next.end();throw e;}}
+    async enterVR(){if(session){await session.end();return;}if(!navigator.xr)throw new Error('Immersive WebXR is unavailable. Use a supported headset browser over HTTPS or localhost.');const next=await navigator.xr.requestSession('immersive-vr',{optionalFeatures:['local-floor']});try{await gl.makeXRCompatible();const ref=await next.requestReferenceSpace('local');next.updateRenderState({baseLayer:new XRWebGLLayer(next,gl)});referenceSpace=ref;session=next;xrControls.reset();next.addEventListener('visibilitychange',()=>xrControls.reset());next.addEventListener('end',()=>{xrControls.reset();session=null;canvas.dispatchEvent(new Event('vrend'));});next.requestAnimationFrame(xrDraw);}catch(e){await next.end();throw e;}}
   };
   const vr=document.getElementById('vr');if(vr){navigator.xr?.isSessionSupported('immersive-vr').then(ok=>{vr.disabled=!ok;vr.title=ok?'Enter immersive headset view':'No immersive VR device detected';}).catch(()=>{});vr.addEventListener('click',async()=>{try{await api.enterVR();vr.textContent=session?'Exit VR':'Enter VR';}catch(error){canvas.dispatchEvent(new CustomEvent('rendererror',{detail:error.message}));}});canvas.addEventListener('vrend',()=>vr.textContent='Enter VR');}
   return api;

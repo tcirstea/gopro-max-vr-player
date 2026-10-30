@@ -88,3 +88,13 @@ Native AAC stereo, metadata-gated ambisonic headphone rendering, and GPMF relati
 - Added combined audio/video/telemetry consumer and distant-boundary contention checks; rapid seeks while physical reads are held remain within the 256 MiB/two-read limits. Added initial/later telemetry-read cancellation, stale-completion protection, preserved first-frame reference, and serialized concurrent packet preparation checks.
 - Diagnostics v7 adds the telemetry input strategy and read-latency counters. Only synthetic fixtures and general evidence are included here; private diagnostics and media are not published.
 - Final aggregate: **111/111 tests pass**, every source module passes `node --check`, and `git diff --check` passes. Actual target-browser HEVC/GPU/audio playback and device-specific smoothness remain unverified by these mocked tests.
+
+## Quest controller controls — 2026-10-30
+
+Added right-controller WebXR polling: stick Y adjusts the same clamped FOV state as wheel zoom; immersive rays now apply that zoom in eye space before head rotation. Stick X seeks ±5 seconds with 500 ms repeats, and A toggles playback on a rising edge. Native MAX and equirectangular transports share the existing play/pause paths; seeks clamp to duration. Desktop controls, head rotation and stabilization remain intact. Trigger + stick turning is deferred.
+
+Automated tests cover dead zones/dominant axis, directions, frame-time clamping, repeat intervals, button hold/release, source filtering, disconnect/reentry/focus reset, native/equirectangular seek boundaries, disabled controls and playback failures, plus renderer wiring. The full Node suite passed: **121/121 tests**, with all source/test JavaScript syntax checks passing. The Pages workflow reruns the suite before deployment.
+
+A local headless Chromium smoke test was attempted but did not run: sandbox sockets were denied; the approved escalation then failed while constructing the environment (`bwrap: Can't create file at /home/agent/.codex/sessions: Read-only file system`). No physical Quest hardware is available to this task. Therefore real headset button permissions, visual zoom/comfort, native seek responsiveness and reentry remain **not physically verified**.
+
+Manual Quest check: load a clip and enter VR; push right stick forward/back to zoom; left/right should seek 5 seconds per nudge and repeat at most twice per second when held; press/release A to pause/resume (holding must not repeat). Repeat with native MAX and equirectangular clips, paused and playing, near both ends. Verify head tracking, desktop wheel/reset after exit, controller disconnect/reconnect, and headset menu interruption. Trigger/grip must remain unassigned.
