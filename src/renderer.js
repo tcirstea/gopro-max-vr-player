@@ -31,18 +31,18 @@ export function createRenderer(canvas) {
   let xrCenter=quaternionMatrix(IDENTITY_QUATERNION),pendingRecenter=false;
   let xrPanel=null,panelStateCallback=null;
   const panelError=error=>canvas.dispatchEvent(new CustomEvent('xrerror',{detail:`VR controls: ${error.message}`}));
-  function togglePanel(input){
+  function togglePanel(input,reveal=false){
     try{
       xrPanel??=createXRPanel(gl,{getState:()=>panelStateCallback?.()||{},onAction:(action,value)=>{
         const current=session;
         Promise.resolve().then(()=>{if(!current||session!==current)return;if(action==='exit')return api.enterVR();canvas.dispatchEvent(new CustomEvent('xrpanelaction',{detail:{action,value}}));}).catch(panelError);
       }});
-      xrPanel.toggle(input);
+      if(reveal)xrPanel.show(input);else xrPanel.toggle(input);
     }catch(error){panelError(error);}
   }
   const zoomDetents=createZoomDetents();let lastWheelTime=null;
   const viewDrag=createXRViewDrag();let dragSource=null;
-  const xrControls=createXRControls({togglePanel,zoom:(delta,time)=>{fov=zoomDetents.apply(fov,delta,time);},zoomEnd:()=>zoomDetents.release(),seek:seconds=>canvas.dispatchEvent(new CustomEvent('xrseek',{detail:seconds})),togglePlayback:()=>canvas.dispatchEvent(new Event('xrtoggleplay')),resetZoom:()=>{fov=Math.PI/2;zoomDetents.reset();},dragView:(active,input)=>{dragSource=active?input:null;viewDrag.setActive(active);}});
+  const xrControls=createXRControls({togglePanel,showPanel:input=>togglePanel(input,true),zoom:(delta,time)=>{fov=zoomDetents.apply(fov,delta,time);},zoomEnd:()=>zoomDetents.release(),seek:seconds=>canvas.dispatchEvent(new CustomEvent('xrseek',{detail:seconds})),togglePlayback:()=>canvas.dispatchEvent(new Event('xrtoggleplay')),resetZoom:()=>{fov=Math.PI/2;zoomDetents.reset();},dragView:(active,input)=>{dragSource=active?input:null;viewDrag.setActive(active);}});
   function reportView(pose=null){const view=pose?multiplyMatrix3(viewRotationMatrix(yaw,0),multiplyMatrix3(xrCenter,viewRotationMatrix(0,0,pose))):viewRotationMatrix(yaw,pitch);lastView=multiplyMatrix3(stabilization,view);orientationCallback?.(lastView.slice());}
   function upload(s,i){gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,textures[i]);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,s);}
   function uploadSource(){if(source&&(dirty||(source.tagName==='VIDEO'&&!source.paused))&&(source.tagName!=='VIDEO'||source.readyState>=2)){try{upload(source,0);}catch(error){source=null;canvas.dispatchEvent(new CustomEvent('rendererror',{detail:error.message}));}}dirty=false;}
@@ -62,6 +62,7 @@ export function createRenderer(canvas) {
     setMaxSources(first,second,options={}){const width=options.width??first.displayWidth??first.videoWidth??first.width;const height=options.height??first.displayHeight??first.videoHeight??first.height;const l=maxLayout(width,height);const secondWidth=second.displayWidth??second.videoWidth??second.width;const secondHeight=second.displayHeight??second.videoHeight??second.height;if(!options.width&&(secondWidth!==width||secondHeight!==height))throw new Error('MAX track frames must have matching dimensions.');if(width>gl.getParameter(gl.MAX_TEXTURE_SIZE))throw new Error('This GPU cannot hold the MAX video textures.');if(gl.isContextLost())throw new Error('Graphics context is lost.');upload(first,0);upload(second,1);gl.uniform4f(loc('maxSize'),l.width,l.height,l.side,l.center);gl.uniform1f(loc('maxBlend'),l.blend);stabilization=quaternionMatrix(options.stabilization||IDENTITY_QUATERNION);source=null;mode=1;dirty=false;},
     // A single active render loop drives native media even when immersive XR
     // suppresses window animation frames; advance before texture/view upload.
+    hideXRControls(){xrPanel?.reset();},
     onXRPanelState(callback){panelStateCallback=callback;return ()=>{if(panelStateCallback===callback)panelStateCallback=null;};},
     onBeforeRender(callback){frameCallback=callback;return ()=>{if(frameCallback===callback)frameCallback=null;};},
     // Camera-to-raw-source sampling rotation, column-major. Includes XR and

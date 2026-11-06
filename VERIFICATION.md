@@ -163,3 +163,16 @@ The lazily allocated WebGL panel sits 1.6 metres along the invoking controller r
 Automated tests include panel placement/ray hit tests, action mapping, timer behavior, scrub lifecycle, media-state/actions and GL restoration. No real headset/browser WebGL smoke test is claimed; physical panel legibility, pointing ergonomics, expanded-zoom comfort and target-device media performance remain manual validation items. No footage or user files were uploaded or added to source.
 
 Combined release validation: **172/172 tests passed**, plus syntax checks for every source/test JavaScript file. Renderer-panel integration verifies lazy B/Y creation, state provider, one update/two eye draws, deferred actions, serialized exit, lifecycle reset/reuse and stale-action suppression.
+
+
+## Bumper reveal and sortable thumbnail playlist — 2026-11-06
+
+Added hidden-panel reveal on either index-trigger rising edge, retaining B/Y toggle and grip drag. The opening press cannot select a control. Added a world-space playlist window with list/grid, paging, five sort keys and direction. Selecting a stable clip ID hides controls before opening it. Browsing is exempt from transport auto-hide.
+
+A desktop native dialog mirrors the queue, supports keyboard/backdrop/close dismissal, paging, list/grid, and stable keyboard focus during metadata/thumbnail updates. Filenames use text nodes. Sorting preserves the current clip and updates Previous/Next and autoplay order. Missing dates remain last for both directions; original addition number is immutable. Filesystem creation dates are explicitly unavailable rather than substituted with lastModified. Projection confirmation is remembered per File for repeat visits.
+
+Local previews use a browser midpoint seek or a bounded single-track `.360` HEVC sync-sample decode nearest midpoint. Previews are limited to 320 pixels, run sequentially while paused, abort on play/switch/disposal, time out after ten seconds, and clean up frames/decoders/object URLs. Metadata inspection uses existing bounded movie reads. Tests are synthetic and no private footage or user filenames have been published.
+
+Validation: full Node suite and JavaScript syntax checks run locally. Physical Quest behavior, hardware HEVC thumbnails and visual browser rendering remain unverified: local headless Chromium launch was blocked by the environment's socket restrictions, including an approved elevated attempt; the supported cloud browser could not connect to the local preview server. Automated DOM/dialog, mock WebXR and decoder tests are not a substitute for these manual checks.
+
+Final local release check: **206/206 tests passed**, including background preview cancellation, pending-play exclusion and stale queue races. Every source and test JavaScript file passes `node --check`.

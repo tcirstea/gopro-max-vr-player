@@ -115,3 +115,15 @@ test('zoomEnd requires both axes neutral, not horizontal movement or click, and 
  h.left.gamepad.buttons[3].pressed=false;h.left.gamepad.axes[3]=-1;h.tick(120);h.session.inputSources=[h.input];h.tick(140);assert.equal(h.calls.end,2);
  h.input.gamepad.axes[3]=1;h.tick(160);h.controls.reset();assert.equal(h.calls.end,3);h.controls.reset();assert.equal(h.calls.end,3);
 });
+
+test('either index trigger reveals once per press, with held entry, focus and reconnect guarded',()=>{
+ const h=dualHarness(),shown=[];
+ const controls=createXRControls({zoom(){},seek(){},togglePlayback(){},showPanel:s=>shown.push(s)});
+ const tick=t=>controls.update(h.session,t);
+ h.input.gamepad.buttons[0].pressed=true;tick(0);tick(20);assert.deepEqual(shown,[]);
+ h.input.gamepad.buttons[0].pressed=false;tick(40);h.input.gamepad.buttons[0].pressed=true;tick(60);tick(80);assert.deepEqual(shown,[h.input]);
+ h.left.gamepad.buttons[0].pressed=true;tick(100);assert.deepEqual(shown,[h.input,h.left]);
+ h.session.visibilityState='hidden';tick(120);h.session.visibilityState='visible';tick(140);assert.equal(shown.length,2);
+ h.session.inputSources=[];tick(160);h.session.inputSources=[h.left,h.input];tick(180);assert.equal(shown.length,2);
+ controls.reset();tick(200);assert.equal(shown.length,2);
+});

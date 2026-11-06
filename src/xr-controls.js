@@ -1,7 +1,8 @@
 // Quest Touch xr-standard mapping: stick axes 2/3; grip 1; stick click 3;
-// A/X 4 toggles playback, B/Y 5 toggles the panel. Upper triggers select items in the VR panel.
+// A/X 4 toggles playback, B/Y 5 toggles the panel. Index trigger 0 reveals
+// hidden controls; a subsequent trigger click selects an item. Grip 1 stays drag.
 export {DEFAULT_FOV,zoomFov} from './zoom.js';
-export function createXRControls({zoom, seek, togglePlayback, resetZoom=()=>{},dragView=()=>{},togglePanel=()=>{},zoomEnd=()=>{}}) {
+export function createXRControls({zoom, seek, togglePlayback, resetZoom=()=>{},dragView=()=>{},togglePanel=()=>{},showPanel=()=>{},zoomEnd=()=>{}}) {
   const states=new Map();let gripOwner=null,stickOwner=null,direction=0,repeatAt=0,zoomGesture=null;
   function endGrip(){if(gripOwner){const previous=gripOwner;gripOwner=null;dragView(false,previous);}}
   function reset(){endGrip();states.clear();stickOwner=null;direction=0;repeatAt=0;if(zoomGesture)zoomEnd();zoomGesture=null;}
@@ -12,14 +13,15 @@ export function createXRControls({zoom, seek, togglePlayback, resetZoom=()=>{},d
     if(!sources.length){reset();return;}
     for(const source of states.keys())if(!sources.includes(source))states.delete(source);
     if(gripOwner && (!states.has(gripOwner)||!gripOwner.gamepad.buttons?.[1]?.pressed))endGrip();
-    let play=false,resetClicked=false,panelSource=null;
+    let play=false,resetClicked=false,panelSource=null,revealSource=null;
     const samples=sources.map(source=>{
-      const pad=source.gamepad,buttons=[1,3,4,5].map(i=>!!pad.buttons?.[i]?.pressed),previous=states.get(source);
+      const pad=source.gamepad,buttons=[1,3,4,5,0].map(i=>!!pad.buttons?.[i]?.pressed),previous=states.get(source);
       const rising=i=>!!previous && buttons[i]&&!previous.buttons[i];
       if(rising(0)&&!gripOwner){gripOwner=source;dragView(true,source);}
       if(rising(1))resetClicked=true;
       if(rising(2))play=true;
       if(rising(3)&&!panelSource)panelSource=source;
+      if(rising(4)&&!revealSource)revealSource=source;
       const axis=i=>Number.isFinite(pad.axes?.[i])?Math.max(-1,Math.min(1,pad.axes[i])):0;
       const dt=previous?Math.max(0,Math.min(.05,(time-previous.time)/1000)):0;
       states.set(source,{buttons,time});
@@ -46,5 +48,6 @@ export function createXRControls({zoom, seek, togglePlayback, resetZoom=()=>{},d
     direction=nextDirection;
     if(play)togglePlayback();
     if(panelSource)togglePanel(panelSource);
+    else if(revealSource)showPanel(revealSource);
   }};
 }

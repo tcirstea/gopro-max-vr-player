@@ -85,3 +85,44 @@ test('mute label repaints immediately after browser state changes, without expos
  labels.length=0;h.state.muted=false;h.panel.draw(view);assert.ok(labels.includes('Mute'));assert.ok(!labels.includes('Unmute'));
  labels.length=0;h.state.canMute=false;h.panel.draw(view);assert.ok(labels.includes('Mute'));
 });
+
+test('trigger reveal does not toggle a visible panel and opening press cannot select',t=>{
+ const h=harness(t);h.panel.reset();h.right.gamepad.buttons[0].pressed=true;h.panel.show(h.right);h.tick();h.aim(h.right,.312,.25);h.trigger(h.right,false);assert.deepEqual(h.actions,[]);
+ h.panel.show(h.left);h.trigger(h.right,true);h.trigger(h.right,false);assert.deepEqual(h.actions,[['play',undefined]]);
+});
+function openPlaylist(h){
+ h.aim(h.right,.78,.9);h.trigger(h.right,true);h.trigger(h.right,false);
+ // The playlist window is taller, while retaining the same world-space center.
+ return (u,v)=>{h.aim(h.right,u,.5+(v-.5)*.9/.375);h.trigger(h.right,true);h.trigger(h.right,false);};
+}
+test('playlist supports five sorts, direction, grid/list, paging and selection hides before action',t=>{
+ const h=harness(t);h.state.playlist={items:Array.from({length:13},(_,i)=>({id:i,name:`clip ${i}`,thumbnail:null})),sort:'added',version:0};
+ const click=openPlaylist(h);
+ for(const [i,key] of ['added','name','size','dateTaken','fileCreated'].entries())click(.10+i*.186,.21);
+ assert.deepEqual(h.actions.map(a=>a.slice(0,2)),['added','name','size','dateTaken','fileCreated'].map(key=>['playlist-sort',key]));
+ click(.75,.11);assert.equal(h.actions.at(-1)[0],'playlist-direction');
+ click(.4,.11); // grid, six per page
+ click(.8,.94); // page two
+ click(.15,.4);assert.deepEqual(h.actions.at(-1),['playlist-select',6]);
+ let draws=0;h.gl.drawArrays=()=>draws++;h.panel.draw({});assert.equal(draws,0,'all VR controls hidden after selecting');
+ h.rays.set(h.right.targetRaySpace,identity());h.panel.show(h.right);h.tick();const clickAgain=openPlaylist(h); // grid preference retained
+ clickAgain(.4,.11); // list, five per page
+ clickAgain(.8,.94);clickAgain(.1,.32);assert.deepEqual(h.actions.at(-1),['playlist-select',5]);
+});
+test('playlist remains open during playback and shows thumbnails, selected item and empty state',t=>{
+ const h=harness(t);h.state.playlist={items:[{id:'a',name:'a.mp4',thumbnail:{}}],selectedId:'a',version:1};h.state.playing=true;
+ const click=openPlaylist(h);for(let i=0;i<300;i++)h.tick();
+ const labels=[],images=[];h.ctx.fillText=text=>labels.push(text);h.ctx.drawImage=(...args)=>images.push(args);
+ const view={projectionMatrix:identity(),transform:{inverse:{matrix:identity()}}};h.panel.draw(view);assert.ok(labels.includes('a.mp4'));assert.equal(images.length,1);
+ h.state.playlist={items:[],version:2};h.panel.draw(view);assert.ok(labels.some(text=>text.includes('Add videos')));
+ click(.1,.11);h.aim(h.right,.312,.25);h.trigger(h.right,true);h.trigger(h.right,false);assert.equal(h.actions.at(-1)[0],'play');
+});
+test('playlist hit rectangles stay within bounds, page indices clamp and missing metadata stays selectable',async()=>{
+ const {playlistLayout,playlistTarget}=await import('../src/xr-panel.js');
+ for(const mode of ['list','grid']){
+  const layout=playlistLayout({items:Array.from({length:15},(_,id)=>({id}))},mode,999);
+  assert.ok(layout.page<layout.pages);assert.ok(!layout.targets.some(t=>t.action==='page-next'));
+  for(const r of layout.targets){assert.ok(r.x>=0&&r.y>=0&&r.x+r.w<=1&&r.y+r.h<=1);assert.equal(playlistTarget({u:r.x+r.w/2,v:r.y+r.h/2},layout),r.action);}
+ }
+ assert.equal(playlistLayout({},'list',-2).page,0);
+});

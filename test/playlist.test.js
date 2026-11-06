@@ -1,3 +1,4 @@
+import {createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS} from '../src/playlist-model.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -6,7 +7,7 @@ const source=readFileSync(new URL('../src/app.js',import.meta.url),'utf8').repla
 function setup({inspect,create}={}){
  const elements=new Map(),players=[],revoked=[];
  function el(id){if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,value:0,checked:true,paused:true,handlers:{},addEventListener(name,fn){(this.handlers[name]??=[]).push(fn);},emit(name){for(const fn of this.handlers[name]||[])fn({target:this});},canPlayType(){return '';},pause(){this.paused=true;},play(){this.paused=false;return Promise.resolve();},load(){this.readyState=0;},removeAttribute(){},replaceChildren(...children){this.children=children;}});return elements.get(id);}
- const context=vm.createContext({document:{getElementById:el,createElement:()=>({})},window:{addEventListener(){}},URL:{createObjectURL:()=>`blob:${Math.random()}`,revokeObjectURL:url=>revoked.push(url)},createRenderer:()=>({setSource(){},setMaxSources(){}}),demoPanorama:()=>({}),formatTime:String,inspectFile:inspect|| (async()=>({nativeCandidate:true,tracks:[]})),createNativePlayer:create|| (async(file,options)=>{const player={file,options,playing:false,duration:20,audioState:{available:true,modes:['stereo','ambisonic'],mode:'stereo'},setAudioMode(mode){this.audioState.mode=mode;},setMuted(value){this.muted=value;},setVolume(value){this.volume=value;},play(){this.playing=true;return Promise.resolve();},pause(){this.playing=false;},close(){this.closed=true;}};players.push(player);return player;})});
+ const context=vm.createContext({createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:el,createElement:()=>({})},window:{addEventListener(){}},URL:{createObjectURL:()=>`blob:${Math.random()}`,revokeObjectURL:url=>revoked.push(url)},createRenderer:()=>({setSource(){},setMaxSources(){}}),demoPanorama:()=>({}),formatTime:String,inspectFile:inspect|| (async()=>({nativeCandidate:true,tracks:[]})),createNativePlayer:create|| (async(file,options)=>{const player={file,options,playing:false,duration:20,audioState:{available:true,modes:['stereo','ambisonic'],mode:'stereo'},setAudioMode(mode){this.audioState.mode=mode;},setMuted(value){this.muted=value;},setVolume(value){this.volume=value;},play(){this.playing=true;return Promise.resolve();},pause(){this.playing=false;},close(){this.closed=true;}};players.push(player);return player;})});
  vm.runInContext(source,context);
  return {context,el,players,revoked};
 }
@@ -56,4 +57,34 @@ test('queued end advance is canceled by demo or a newer queue',async()=>{
  const {context:c,el,players}=setup();await c.setPlaylist(files);
  players[0].options.onState({playing:false,currentTime:20,duration:20});el('demo').emit('click');await flush();assert.equal(players.length,1);assert.equal(el('playlist').hidden,true);
  await c.setPlaylist(files);players[1].options.onState({playing:false,currentTime:20,duration:20});await c.setPlaylist([files[2]]);await flush();assert.equal(el('playlist-position').textContent,'1 / 1');assert.equal(el('filename').textContent,'three.360');assert.equal(players.at(-1).playing,false);
+});
+
+test('sorting changes real transport order while preserving the current clip and added numbers',async()=>{
+ const {context:c,el,players}=setup();
+ const input=[{name:'clip10.360',size:100},{name:'clip2.360',size:300},{name:'clip1.360',size:200}];
+ await c.setPlaylist(input);const current=players[0];
+ c.sortPlaylist('name',false);
+ assert.equal(players.length,1);assert.equal(players[0],current);assert.equal(el('playlist-position').textContent,'3 / 3');
+ assert.deepEqual(el('playlist-select').children.map(x=>x.textContent),['3. clip1.360','2. clip2.360','1. clip10.360']);
+ c.sortPlaylist('size',true);assert.equal(el('playlist-position').textContent,'3 / 3');
+ await c.selectClip(0,true);players.at(-1).options.onState({playing:false,currentTime:20,duration:20});await flush();
+ assert.equal(players.at(-1).file.name,'clip1.360');assert.equal(players.at(-1).playing,true);
+ c.sortPlaylist('added',false);assert.equal(el('playlist-position').textContent,'3 / 3');
+});
+test('date sorting places unknowns last in both directions and never substitutes modified dates',async()=>{
+ const {context:c,el}=setup();await c.setPlaylist(files);await flush();
+ vm.runInContext('playlist[0].dateTaken=200;playlist[1].dateTaken=null;playlist[2].dateTaken=100;',c);
+ c.sortPlaylist('dateTaken',false);assert.deepEqual(el('playlist-select').children.map(x=>x.textContent),['3. three.360','1. one.360','2. two.360']);
+ c.sortPlaylist('dateTaken',true);assert.deepEqual(el('playlist-select').children.map(x=>x.textContent),['1. one.360','3. three.360','2. two.360']);
+ c.sortPlaylist('fileCreated',true);assert.deepEqual(el('playlist-select').children.map(x=>x.textContent),['1. one.360','2. two.360','3. three.360']);
+});
+test('playlist selection uses stable ID after sort, starts playback, and ignores IDs from a replaced queue',async()=>{
+ const {context:c,players}=setup();await c.setPlaylist(files);const id=vm.runInContext('playlist[1].id',c);
+ c.sortPlaylist('size',true);await c.selectPlaylistItem(id);assert.equal(players.at(-1).file.name,'two.360');assert.equal(players.at(-1).playing,true);
+ await c.setPlaylist([files[0]]);const count=players.length;await c.selectPlaylistItem(id);assert.equal(players.length,count);
+});
+test('confirmed equirectangular projection survives switching away and back',async()=>{
+ const {context:c,el}=setup({inspect:async()=>({tracks:[],videoTracks:[{}]})});await c.setPlaylist(files);
+ el('equirect').emit('click');await c.selectClip(1);assert.equal(el('equirect').hidden,false);
+ await c.selectClip(0);assert.equal(el('equirect').hidden,true);assert.match(el('status').textContent,/Loading local video/);
 });

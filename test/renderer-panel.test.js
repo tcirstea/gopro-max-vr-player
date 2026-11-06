@@ -10,14 +10,14 @@ import * as quaternions from '../src/quaternion.js';
 
 test('renderer lazily wires B/Y panel, frame/per-eye rendering, deferred actions, exit and lifecycle resets',async()=>{
  let xrFrame,options,created=0,resets=0,ends=0,requests=0,action=null,insideFrame=false;
- const events=[],toggles=[],updates=[],draws=[],sessionEvents={};
+ const events=[],shown=[],toggles=[],updates=[],draws=[],sessionEvents={};
  const gl=new Proxy({getShaderParameter:()=>true,getProgramParameter:()=>true,isContextLost:()=>false,getUniformLocation:(_p,n)=>n},{get:(t,k)=>k in t?t[k]:/^[A-Z_0-9]+$/.test(k)?1:()=>({})});
  const canvas={getContext:()=>gl,addEventListener(){},dispatchEvent(event){assert.equal(insideFrame,false,'panel actions must not mutate app during rendering');events.push(event);}};
  const input=handedness=>({handedness,gamepad:{mapping:'xr-standard',axes:[0,0,0,0],buttons:Array.from({length:6},()=>({pressed:false}))}});
  const right=input('right'),left=input('left');
  const session={visibilityState:'visible',inputSources:[left,right],renderState:{},async requestReferenceSpace(){return {reference:true};},updateRenderState(s){Object.assign(this.renderState,s);},addEventListener(n,f){sessionEvents[n]=f;},requestAnimationFrame(f){xrFrame=f;},async end(){ends++;sessionEvents.end?.();}};
  const context=vm.createContext({createZoomDetents,createXRViewDrag,createXRControls,maxLayout,MAX_GLSL,...quaternions,Event,CustomEvent,Promise,performance,document:{getElementById:()=>null},navigator:{xr:{requestSession:async()=>{requests++;return session;}}},requestAnimationFrame(){},XRWebGLLayer:class{getViewport(){return {x:0,y:0,width:400,height:300};}},createXRPanel:(_gl,callbacks)=>{
-  assert.equal(_gl,gl);created++;options=callbacks;return {toggle(s){toggles.push(s);},reset(){resets++;},update(...args){updates.push(args);if(action){callbacks.onAction(...action);action=null;}},draw(view){draws.push(view);}};
+  assert.equal(_gl,gl);created++;options=callbacks;return {show(s){shown.push(s);},toggle(s){toggles.push(s);},reset(){resets++;},update(...args){updates.push(args);if(action){callbacks.onAction(...action);action=null;}},draw(view){draws.push(view);}};
  }});
  vm.runInContext(readFileSync(new URL('../src/renderer.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,''),context);
  const renderer=context.createRenderer(canvas);assert.equal(created,0);const state={playing:true,volume:.4};const unsubscribe=renderer.onXRPanelState(()=>state);
@@ -29,6 +29,8 @@ test('renderer lazily wires B/Y panel, frame/per-eye rendering, deferred actions
  tick(40);assert.equal(toggles.length,1);assert.equal(updates.length,2);assert.equal(draws.length,4);
  right.gamepad.buttons[5].pressed=true;tick(60);assert.equal(created,1);assert.deepEqual(toggles,[left,right]);
  action=['volume',.7];tick(80);assert.equal(events.length,0);await Promise.resolve();assert.equal(events.at(-1).type,'xrpanelaction');assert.equal(events.at(-1).detail.action,'volume');assert.equal(events.at(-1).detail.value,.7);
+ right.gamepad.buttons[0].pressed=true;tick(90);assert.deepEqual(shown,[right]);tick(95);assert.equal(shown.length,1);
+ const hideBefore=resets;renderer.hideXRControls();assert.equal(resets,hideBefore+1);
  unsubscribe();assert.equal(Object.keys(options.getState()).length,0);
  const beforeReset=resets;pose=null;tick(100);assert.equal(resets,beforeReset+1);pose={transform:{matrix},views};sessionEvents.visibilitychange();assert.equal(resets,beforeReset+2);
  action=['exit'];tick(120);assert.equal(ends,0);await new Promise(resolve=>setImmediate(resolve));assert.equal(ends,1);assert.equal(requests,1,'exit must not request a new immersive session');assert.equal(resets,beforeReset+3);assert.equal(events.at(-1).type,'vrend');
