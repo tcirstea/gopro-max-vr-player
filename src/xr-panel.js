@@ -37,7 +37,7 @@ export function panelTarget(hit,state={}){
 }
 // Normalized rectangles are shared by rendering and ray selection.
 export function playlistLayout(playlist={},mode='list',requestedPage=0){
- const items=playlist?.items||[],count=mode==='grid'?6:5;
+ const items=playlist?.items||[],rowScale=mode==='list'&&playlist.doubleHeightRows?2:1,count=mode==='grid'?6:rowScale===2?2:5;
  const pages=Math.max(1,Math.ceil(items.length/count)),page=Math.max(0,Math.min(pages-1,requestedPage));
  const targets=[
   {action:'back',label:'Back',x:.04,y:.08,w:.21,h:.075},
@@ -46,7 +46,7 @@ export function playlistLayout(playlist={},mode='list',requestedPage=0){
  ];
  const sorts=[['added','Added #'],['name','Filename'],['size','File size'],['dateTaken','File date'],['fileCreated','File created']];
  sorts.forEach(([key,label],i)=>targets.push({action:`sort:${key}`,label:(playlist?.sort===key?'• ':'')+label,x:.04+i*.186,y:.18,w:.177,h:.07}));
- items.slice(page*count,(page+1)*count).forEach((item,i)=>targets.push({action:`item:${item.id}`,item,x:mode==='grid'?.04+(i%3)*.313:.04,y:mode==='grid'?.28+Math.floor(i/3)*.29:.28+i*.12,w:mode==='grid'?.294:.92,h:mode==='grid'?.27:.105}));
+ items.slice(page*count,(page+1)*count).forEach((item,i)=>targets.push({action:`item:${item.id}`,item,x:mode==='grid'?.04+(i%3)*.313:.04,y:mode==='grid'?.28+Math.floor(i/3)*.29:.28+i*.12*rowScale,w:mode==='grid'?.294:.92,h:mode==='grid'?.27:.105*rowScale}));
  if(page>0)targets.push({action:'page-prev',label:'Previous page',x:.04,y:.9,w:.29,h:.075});
  if(page+1<pages)targets.push({action:'page-next',label:'Next page',x:.67,y:.9,w:.29,h:.075});
  return {targets,page,pages};
@@ -60,7 +60,7 @@ export function createPanelTimer(){
  return {reset(){elapsed=0;last=null;},update(time,playing,interacting=false){const dt=last===null?0:Math.max(0,Math.min(250,time-last));last=time;if(interacting)elapsed=0;else if(playing)elapsed+=dt;return elapsed>=2000;}};
 }
 export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
- let browsing=false,viewMode='list',page=0;
+ let browsing=false,viewMode='list',page=0,lastRowScale=1;
  let panel=null,pending=null,visible=false,capture=null,preview=null,lastPaint='',hover=null,mediaId;
  const buttons=new Map(),timer=createPanelTimer();
  const canvas=document.createElement('canvas');canvas.width=1024;canvas.height=320;
@@ -88,7 +88,10 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
   if(action.startsWith('item:')){const item=state.playlist?.items?.find(item=>String(item.id)===action.slice(5));if(item){reset();act('playlist-select',item.id);}return;}
   act(action);
  }
- function layout(state){const result=playlistLayout(state.playlist,viewMode,page);page=result.page;return result;}
+ function layout(state){
+  const rowScale=viewMode==='list'&&state.playlist?.doubleHeightRows?2:1;
+  if(rowScale!==lastRowScale){page=0;capture=null;lastRowScale=rowScale;}
+  const result=playlistLayout(state.playlist,viewMode,page);page=result.page;return result;}
  function paintPlaylist(state){
   const {targets,pages}=layout(state),playlist=state.playlist||{};
   ctx.fillStyle='#11232c';ctx.fillRect(0,0,1024,768);
@@ -98,12 +101,15 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
    const {action,x,y,w,h,item}=target,px=x*1024,py=y*768,pw=w*1024,ph=h*768;
    ctx.fillStyle=hover?.target===action?'#3f7284':item&&item.id===playlist.selectedId?'#305c62':'#263f4a';ctx.fillRect(px,py,pw,ph);
    if(item){
-    const tw=viewMode==='grid'?pw-16:108,th=viewMode==='grid'?ph-48:ph-12;
+    const rowScale=playlist.doubleHeightRows?2:1,tw=viewMode==='grid'?pw-16:108*rowScale,th=viewMode==='grid'?ph-48:(.105*768-12)*rowScale;
     ctx.fillStyle='#142d37';ctx.fillRect(px+8,py+6,tw,th);
-    if(item.thumbnail)try{ctx.drawImage(item.thumbnail,px+8,py+6,tw,th);}catch{/* A pending thumbnail keeps its placeholder. */}
+    if(item.thumbnail)try{
+     const scale=Math.min(tw/item.thumbnail.width,th/item.thumbnail.height),iw=item.thumbnail.width*scale,ih=item.thumbnail.height*scale;
+     ctx.drawImage(item.thumbnail,px+8+(tw-iw)/2,py+6+(th-ih)/2,iw,ih);
+    }catch{/* A pending thumbnail keeps its placeholder. */}
     if(!item.thumbnail)text('▶',px+tw/2,py+th/2+12,28);
-    const tx=viewMode==='grid'?px+10:px+128,ty=viewMode==='grid'?py+ph-17:py+ph/2+9;
-    const max=viewMode==='grid'?22:52;const name=`${item.added?item.added+'. ':''}${String(item.name||'Untitled')}`;text(name.length>max?name.slice(0,max-1)+'…':name,tx,ty,24);
+    const tx=viewMode==='grid'?px+10:px+tw+20,ty=viewMode==='grid'?py+ph-17:py+ph/2+9;
+    const max=viewMode==='grid'?22:rowScale===2?44:52;const name=`${item.added?item.added+'. ':''}${String(item.name||'Untitled')}`;text(name.length>max?name.slice(0,max-1)+'…':name,tx,ty,24);
    }else{text(target.label,px+12,py+ph/2+9,23);}
   }
   if(!playlist.items?.length)text('Add videos to your playlist to browse them here.',80,370,28);
@@ -114,7 +120,7 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
 
  function paint(state){
  const progress=preview??(state.duration>0?clamp(state.currentTime/state.duration):0);
- const key=JSON.stringify([browsing,viewMode,page,state.playlist?.version,state.playlist?.sort,state.playlist?.descending,state.playlist?.selectedId,state.playlist?.items?.map(item=>[item.id,item.name,!!item.thumbnail]),state.playing,state.canPlay,state.canSeek,state.canPrevious,state.canNext,state.canMute,state.muted,Math.floor(state.currentTime||0),Math.floor(state.duration||0),progress,hover]);
+ const key=JSON.stringify([browsing,viewMode,page,state.playlist?.version,state.playlist?.doubleHeightRows,state.playlist?.sort,state.playlist?.descending,state.playlist?.selectedId,state.playlist?.items?.map(item=>[item.id,item.name,!!item.thumbnail]),state.playing,state.canPlay,state.canSeek,state.canPrevious,state.canNext,state.canMute,state.muted,Math.floor(state.currentTime||0),Math.floor(state.duration||0),progress,hover]);
  if(key===lastPaint)return;lastPaint=key;
  canvas.height=browsing?768:320;
  if(browsing){paintPlaylist(state);}else{

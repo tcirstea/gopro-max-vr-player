@@ -51,3 +51,17 @@ test('gallery labels local metadata, timezone uncertainty and experimental previ
  item.thumbnailDone=false;h.state.version++;h.browser.render();details=h.el('playlist-items').children[0].children[1].children;assert.match(details[2].textContent,/Reading local file info/);
  item.thumbnailDone=true;item.thumbnailSource='Generated native keyframe near midpoint (unstitched)';h.state.version++;h.browser.render();details=h.el('playlist-items').children[0].children[1].children;assert.match(details[2].textContent,/unstitched/);delete globalThis.document;
 });
+
+test('double-height list rows repaginate, retain focus and leave grid layout unchanged',()=>{
+ const h=harness(30);h.browser.open();h.el('playlist-page-next').click();
+ assert.equal(h.el('playlist-items').children[0].dataset.clipId,'1:12');h.el('playlist-items').children[1].focus();
+ h.state.doubleHeightRows=true;h.browser.render();
+ assert.equal(h.el('playlist-items').className,'playlist-list playlist-large-rows');assert.equal(h.el('playlist-items').children.length,6);
+ assert.equal(h.el('playlist-items').children[0].dataset.clipId,'1:12');assert.equal(h.document.activeElement.dataset.clipId,'1:13');assert.equal(h.el('playlist-page').textContent,'30 videos · Page 3 / 5');
+ h.state.doubleHeightRows=false;h.browser.render();assert.equal(h.el('playlist-items').children.length,12);assert.equal(h.el('playlist-items').children[0].dataset.clipId,'1:12');
+ h.state.doubleHeightRows=true;h.el('playlist-layout').click();assert.equal(h.el('playlist-items').className,'playlist-grid');assert.equal(h.el('playlist-items').children.length,12);
+ h.el('playlist-layout').click();assert.equal(h.el('playlist-items').children.length,6);
+ h.browser.close();h.browser.open();assert.equal(h.el('playlist-items').className,'playlist-list playlist-large-rows');
+ h.el('playlist-page-next').click();h.el('playlist-items').children[0].click();assert.deepEqual(h.selected,['1:6']);
+ delete globalThis.document;
+});

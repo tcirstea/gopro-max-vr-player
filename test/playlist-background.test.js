@@ -7,7 +7,7 @@ const source = readFileSync(new URL('../src/app.js', import.meta.url), 'utf8').r
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return {promise, resolve, reject}; };
 const flush = async () => { for (let i = 0; i < 25; i++) await Promise.resolve(); };
 const files = [{name: 'a.360', size: 100}, {name: 'b.360', size: 200}];
-function setup({metadata = async () => ({}), thumbnail = async () => null} = {}) {
+function setup({metadata = async () => ({}), thumbnail = async () => null, storage} = {}) {
   const elements = new Map(), players = [], windows = {}, previews = [];
   let hides = 0, closes = 0;
   function el(id) {
@@ -25,7 +25,7 @@ function setup({metadata = async () => ({}), thumbnail = async () => null} = {})
   const context = vm.createContext({createPlaylistEntries, sortPlaylistEntries, PLAYLIST_SORTS, AbortController,
     createPlaylistBrowser: () => ({render() {}, close() { closes++; }}), readPlaylistMetadata: metadata,
     createPlaylistThumbnail: (file, options) => { previews.push({file, ...options}); return thumbnail(file, options); },
-    document: {getElementById: el, createElement: () => ({})}, window: {addEventListener: (name, fn) => { windows[name] = fn; }},
+    document: {getElementById: el, createElement: () => ({})}, window: {localStorage: storage, addEventListener: (name, fn) => { windows[name] = fn; }},
     URL: {createObjectURL: () => 'blob:synthetic', revokeObjectURL() {}},
     createRenderer: () => ({setSource() {}, setMaxSources() {}, hideXRControls() { hides++; }}), demoPanorama: () => ({}), formatTime: String,
     inspectFile: async () => ({nativeCandidate: true, tracks: []}),
@@ -113,8 +113,8 @@ test('pending playback from an old clip cannot suppress new previews or clear a 
   old.resolve(); await oldPlay; assert.equal(vm.runInContext('pendingPlayback', h.context), 1);
   current.resolve(); await newPlay; assert.equal(vm.runInContext('pendingPlayback', h.context), 0);
 });
-test('thumbnail generation defaults off, retries missing previews on opt-in, and retains completed ones', async()=>{
- const h=setup({thumbnail:async(_file,{generate})=>generate?{thumbnailSource:'Generated midpoint frame'}:null});
+test('saved opt-out is respected, missing previews retry on opt-in, and completed ones remain', async()=>{
+ const h=setup({storage:{getItem:key=>key.endsWith('.generateThumbnails')?'false':null,setItem(){}},thumbnail:async(_file,{generate})=>generate?{thumbnailSource:'Generated midpoint frame'}:null});
  await h.context.setPlaylist(files);await flush();
  assert.equal(h.el('generate-thumbnails').checked,false);assert.ok(h.previews.every(p=>p.generate===false));assert.ok(h.state().items.every(item=>item.thumbnailDone&&!item.thumbnail));
  h.el('generate-thumbnails').checked=true;h.el('generate-thumbnails').emit('change');await flush();
@@ -134,4 +134,56 @@ test('browser-only settings do not add XR setting actions or reset play/view pre
  h.el('generate-thumbnails').checked=true;h.el('generate-thumbnails').emit('change');await flush();assert.equal(h.previews.length,2);
  assert.equal(h.players.length,1);assert.equal(h.hides(),0);assert.equal(h.players[0].playing,true);
  h.players[0].playing=false;h.context.schedulePreviews();await flush();assert.equal(h.previews.length,4);
+});
+
+const storageKey = name => `gopro-max-vr-player.gallery.${name}`;
+function savedStorage(values = {}) {
+ const data = new Map(Object.entries(values));
+ return {data, getItem: key => data.get(key) ?? null, setItem: (key, value) => data.set(key, value)};
+}
+test('new and existing browsers without an explicit thumbnail choice default on without saving defaults', async()=>{
+ for(const storage of [undefined,savedStorage(),savedStorage({[storageKey('doubleHeightRows')]:'true'}),savedStorage({[storageKey('generateThumbnails')]:'invalid'})]){
+  const before=storage&&Array.from(storage.data);
+  const h=setup({storage,thumbnail:async()=>({thumbnailSource:'Generated midpoint frame'})});
+  await h.context.setPlaylist(files);await flush();
+  assert.equal(h.el('generate-thumbnails').checked,true);assert.ok(h.previews.every(p=>p.generate===true));assert.ok(h.state().items.every(item=>item.thumbnail));
+  if(storage)assert.deepEqual(Array.from(storage.data),before,'startup never turns a default into an explicit user choice');
+ }
+});
+test('only explicit gallery booleans persist across reload, including opt-out and normal row size', async()=>{
+ const storage=savedStorage(),h=setup({storage});await h.context.setPlaylist(files);await flush();
+ h.el('generate-thumbnails').checked=false;h.el('generate-thumbnails').emit('change');
+ h.el('double-height-rows').checked=true;h.el('double-height-rows').emit('change');
+ assert.deepEqual(Object.fromEntries(storage.data),{[storageKey('generateThumbnails')]:'false',[storageKey('doubleHeightRows')]:'true'});
+ const next=setup({storage});assert.equal(next.el('generate-thumbnails').checked,false);assert.equal(next.el('double-height-rows').checked,true);assert.equal(next.state().doubleHeightRows,true);
+ next.el('double-height-rows').checked=false;next.el('double-height-rows').emit('change');
+ next.el('generate-thumbnails').checked=true;next.el('generate-thumbnails').emit('change');
+ const again=setup({storage});assert.equal(again.el('generate-thumbnails').checked,true);assert.equal(again.state().doubleHeightRows,false);
+});
+test('blocked local storage reads and failed writes preserve working session preferences',()=>{
+ const storage={getItem(){throw Error('SecurityError');},setItem(){throw Error('QuotaExceededError');}};
+ const h=setup({storage});assert.equal(h.el('generate-thumbnails').checked,true);assert.equal(h.state().doubleHeightRows,false);
+ h.el('generate-thumbnails').checked=false;h.el('generate-thumbnails').emit('change');
+ h.el('double-height-rows').checked=true;h.el('double-height-rows').emit('change');
+ assert.equal(h.state().generateThumbnails,false);assert.equal(h.state().doubleHeightRows,true);
+ const blocked=setup();Object.defineProperty(blocked.context.window,'localStorage',{get(){throw Error('SecurityError');}});
+ blocked.el('double-height-rows').checked=true;blocked.el('double-height-rows').emit('change');assert.equal(blocked.state().doubleHeightRows,true);
+});
+test('row size changes do not restart playback, cancel previews or lose selected clip and sort',async()=>{
+ const pending=deferred(),h=setup({thumbnail:()=>pending.promise});await h.context.setPlaylist(files);await flush();
+ h.context.sortPlaylist('size',true);const selected=h.state().selectedId,active=h.previews[0],version=h.state().version;
+ h.el('double-height-rows').checked=true;h.el('double-height-rows').emit('change');
+ assert.equal(h.previews.length,1);assert.equal(active.signal.aborted,false);assert.equal(h.players.length,1);
+ assert.equal(h.state().selectedId,selected);assert.equal(h.state().sort,'size');assert.equal(h.state().descending,true);assert.ok(h.state().version>version);
+ pending.resolve({thumbnailSource:'Generated midpoint frame'});await flush();assert.ok(h.state().items.every(item=>item.thumbnail));
+ h.players[0].playing=true;h.el('double-height-rows').checked=false;h.el('double-height-rows').emit('change');
+ assert.equal(h.players[0].playing,true);assert.equal(h.previews.length,2);assert.equal(h.hides(),0);
+});
+test('rapid generation off/on discards stale work and retains one active generation loop',async()=>{
+ const pending=deferred();let calls=0;const h=setup({thumbnail:()=>++calls===1?pending.promise:Promise.resolve({fresh:true})});
+ await h.context.setPlaylist(files);await flush();
+ h.el('generate-thumbnails').checked=false;h.el('generate-thumbnails').emit('change');
+ h.el('generate-thumbnails').checked=true;h.el('generate-thumbnails').emit('change');
+ assert.equal(h.previews.length,1);assert.equal(h.previews[0].signal.aborted,true);
+ pending.resolve({stale:true});await flush();assert.equal(h.previews.length,3);assert.ok(h.state().items.every(item=>item.thumbnail.fresh));
 });

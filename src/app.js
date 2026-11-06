@@ -5,9 +5,17 @@ import {createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS} from './playli
 import {createPlaylistBrowser} from './playlist-browser.js';
 import {readPlaylistMetadata,createPlaylistThumbnail} from './playlist-media.js';
 const $=id=>document.getElementById(id), video=$('video');
-// Preferences belong to this page session, not to the loaded media. A temporary
-// unsupported-mode fallback must never overwrite the user's preferred mode.
-const preferences={muted:$('muted').checked,volume:1,audioMode:'stereo',generateThumbnails:false};
+// Store only explicit gallery choices, never filenames, media or audio state.
+// Missing/invalid saved values take the current default; explicit false survives.
+function readGalleryPreference(name,fallback){
+ try{const value=window.localStorage.getItem(`gopro-max-vr-player.gallery.${name}`);return value==='true'?true:value==='false'?false:fallback;}catch{return fallback;}
+}
+function saveGalleryPreference(name,value){
+ try{window.localStorage.setItem(`gopro-max-vr-player.gallery.${name}`,String(value));}catch{/* Storage may be blocked; keep the choice for this session. */}
+}
+// Audio preferences belong to this session, not the loaded media. Unsupported
+// modes must never overwrite the preferred mode.
+const preferences={muted:$('muted').checked,volume:1,audioMode:'stereo',generateThumbnails:readGalleryPreference('generateThumbnails',true),doubleHeightRows:readGalleryPreference('doubleHeightRows',false)};
 function syncAudioPreferences(){
  $('muted').checked=preferences.muted;$('volume').value=preferences.volume;
  video.muted=preferences.muted;video.volume=preferences.volume;
@@ -27,7 +35,7 @@ let renderer,objectURL=null,generation=0,pendingFile=null,nativePlayer=null,nati
 let playlist=[],playlistIndex=-1,playWhenReady=false,playlistEpoch=0,playlistVersion=0,playlistSort='added',playlistDescending=false;
 let previewAbort=null,previewRunning=false,mediaOpening=false,pendingPlayback=0;
 const confirmedProjection=new WeakSet();
-function playlistState(){return {items:playlist,selectedId:playlist[playlistIndex]?.id,sort:playlistSort,descending:playlistDescending,version:playlistVersion,generateThumbnails:preferences.generateThumbnails};}
+function playlistState(){return {items:playlist,selectedId:playlist[playlistIndex]?.id,sort:playlistSort,descending:playlistDescending,version:playlistVersion,generateThumbnails:preferences.generateThumbnails,doubleHeightRows:preferences.doubleHeightRows};}
 const playlistBrowser=createPlaylistBrowser({getState:playlistState,onSelect:selectPlaylistItem,onSort:sortPlaylist,onDirection:()=>sortPlaylist(playlistSort,!playlistDescending)});
 function stopPreview(){previewAbort?.abort();}
 function isPlaying(){return !!(nativePlayer?.playing||(!video.paused&&objectURL));}
@@ -189,9 +197,14 @@ $('volume').addEventListener('input',()=>{const value=Number($('volume').value);
 $('audio-mode').addEventListener('change',()=>{const mode=$('audio-mode').value;if(!['stereo','ambisonic'].includes(mode))return;preferences.audioMode=mode;if(nativePlayer?.audioState?.modes.includes(mode))nativePlayer.setAudioMode(mode);syncAudioMode();});
 $('generate-thumbnails').checked=preferences.generateThumbnails;
 $('generate-thumbnails').addEventListener('change',()=>{
- preferences.generateThumbnails=$('generate-thumbnails').checked;stopPreview();
+ preferences.generateThumbnails=$('generate-thumbnails').checked;saveGalleryPreference('generateThumbnails',preferences.generateThumbnails);stopPreview();
  if(preferences.generateThumbnails)for(const item of playlist)if(!item.thumbnail)item.thumbnailDone=false;
  playlistVersion++;playlistBrowser.render();schedulePreviews();
+});
+$('double-height-rows').checked=preferences.doubleHeightRows;
+$('double-height-rows').addEventListener('change',()=>{
+ preferences.doubleHeightRows=$('double-height-rows').checked;saveGalleryPreference('doubleHeightRows',preferences.doubleHeightRows);
+ playlistVersion++;playlistBrowser.render();
 });
 syncAudioMode();
 $('demo').addEventListener('click',()=>{++generation;stopPreview();playlistEpoch++;playlistVersion++;playlist=[];playlistIndex=-1;playWhenReady=false;mediaOpening=false;pendingPlayback=0;playlistBrowser.close();$('viewer').classList?.remove('controls-hidden');syncPlaylist();$('playlist-select').replaceChildren();clearMedia();$('filename').textContent='Generated demo panorama';$('metadata').textContent='';status('This is a synthetic panorama for testing navigation—not GoPro footage.');});

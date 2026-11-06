@@ -110,7 +110,7 @@ test('playlist supports five sorts, direction, grid/list, paging and selection h
  clickAgain(.8,.94);clickAgain(.1,.32);assert.deepEqual(h.actions.at(-1),['playlist-select',5]);
 });
 test('playlist remains open during playback and shows thumbnails, selected item and empty state',t=>{
- const h=harness(t);h.state.playlist={items:[{id:'a',name:'a.mp4',thumbnail:{}}],selectedId:'a',version:1};h.state.playing=true;
+ const h=harness(t);h.state.playlist={items:[{id:'a',name:'a.mp4',thumbnail:{width:320,height:180}}],selectedId:'a',version:1};h.state.playing=true;
  const click=openPlaylist(h);for(let i=0;i<300;i++)h.tick();
  const labels=[],images=[];h.ctx.fillText=text=>labels.push(text);h.ctx.drawImage=(...args)=>images.push(args);
  const view={projectionMatrix:identity(),transform:{inverse:{matrix:identity()}}};h.panel.draw(view);assert.ok(labels.includes('a.mp4'));assert.equal(images.length,1);
@@ -125,4 +125,33 @@ test('playlist hit rectangles stay within bounds, page indices clamp and missing
   for(const r of layout.targets){assert.ok(r.x>=0&&r.y>=0&&r.x+r.w<=1&&r.y+r.h<=1);assert.equal(playlistTarget({u:r.x+r.w/2,v:r.y+r.h/2},layout),r.action);}
  }
  assert.equal(playlistLayout({},'list',-2).page,0);
+});
+
+test('large VR rows double height, halve thumbnail density and preserve ray targets and paging',async()=>{
+ const {playlistLayout,playlistTarget}=await import('../src/xr-panel.js');
+ const items=Array.from({length:11},(_,id)=>({id})),normal=playlistLayout({items}),large=playlistLayout({items,doubleHeightRows:true});
+ const rows=l=>l.targets.filter(t=>t.item);
+ assert.equal(rows(normal).length,5);assert.equal(rows(large).length,2);assert.equal(rows(large)[0].h,rows(normal)[0].h*2);
+ assert.equal(large.pages,6);assert.equal(rows(playlistLayout({items,doubleHeightRows:true},'list',5))[0].item.id,10);
+ for(const mode of ['list','grid']){
+  const layout=playlistLayout({items,doubleHeightRows:true},mode,999);
+  for(const r of layout.targets){assert.ok(r.x>=0&&r.y>=0&&r.x+r.w<=1&&r.y+r.h<=1);assert.equal(playlistTarget({u:r.x+r.w/2,v:r.y+r.h/2},layout),r.action);}
+ }
+ assert.deepEqual(playlistLayout({items,doubleHeightRows:true},'grid'),playlistLayout({items},'grid'));
+});
+test('VR thumbnails grow in both dimensions without stretching and new density repaints',t=>{
+ const h=harness(t),images=[],labels=[];h.ctx.drawImage=(...args)=>images.push(args);h.ctx.fillText=text=>labels.push(text);
+ h.state.playlist={items:Array.from({length:6},(_,id)=>({id,name:`clip ${id}`,thumbnail:{width:320,height:180}})),version:1};
+ const click=openPlaylist(h),view={projectionMatrix:identity(),transform:{inverse:{matrix:identity()}}};
+ h.panel.draw(view);const normal=images[0];assert.equal(images.length,5);
+ images.length=0;h.state.playlist.doubleHeightRows=true;h.panel.draw(view);assert.equal(images.length,2);
+ assert.equal(images[0][3],normal[3]*2);assert.equal(images[0][4],normal[4]*2);assert.equal(images[0][3]/images[0][4],320/180);
+ click(.8,.94);h.panel.draw(view);assert.ok(labels.includes('Page 2 / 3'));
+ click(.1,.33);assert.deepEqual(h.actions.at(-1),['playlist-select',2]);
+});
+test('VR density change cancels held item capture before a moved row can be selected',t=>{
+ const h=harness(t);h.state.playlist={items:Array.from({length:10},(_,id)=>({id,name:`clip ${id}`})),version:1};
+ openPlaylist(h);h.aim(h.right,.1,.5+(.32-.5)*.9/.375);h.trigger(h.right,true);
+ h.state.playlist.doubleHeightRows=true;h.trigger(h.right,false);assert.deepEqual(h.actions,[]);
+ h.trigger(h.right,true);h.trigger(h.right,false);assert.deepEqual(h.actions,[['playlist-select',0]]);
 });
