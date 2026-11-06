@@ -43,3 +43,11 @@ test('close and reopen, thumbnail repaint focus, shrinking queue and backdrop di
  h.el('playlist-window').handlers.click({target:h.el('playlist-window'),clientX:0,clientY:0});assert.equal(h.el('playlist-window').open,false);
  delete globalThis.document;
 });
+test('gallery labels local metadata, timezone uncertainty and experimental preview state without HTML',()=>{
+ const h=harness(1),item=h.state.items[0];Object.assign(item,{cameraModel:'<Camera>',cameraFirmware:'TEST.01',duration:95,videoTracks:[{width:4096,height:1344,codec:'hvc1'},{width:4096,height:1344,codec:'hvc1'}],dateTaken:Date.UTC(2024,0,1,12),dateTakenSource:'Embedded movie creation time (timezone unverified)',thumbnailDone:true});
+ h.browser.open();let details=h.el('playlist-items').children[0].children[1].children;
+ assert.match(details[1].textContent,/2024-01-01 12:00:00 \(timezone unverified\)/);assert.match(details[2].textContent,/Preview generation is off/);assert.match(details[3].textContent,/<Camera> · Firmware TEST.01 · 1:35 · 4096 × 1344 per track · 2 video tracks · hvc1/);
+ h.state.generateThumbnails=true;h.state.version++;h.browser.render();details=h.el('playlist-items').children[0].children[1].children;assert.match(details[2].textContent,/Preview unavailable/);
+ item.thumbnailDone=false;h.state.version++;h.browser.render();details=h.el('playlist-items').children[0].children[1].children;assert.match(details[2].textContent,/Reading local file info/);
+ item.thumbnailDone=true;item.thumbnailSource='Generated native keyframe near midpoint (unstitched)';h.state.version++;h.browser.render();details=h.el('playlist-items').children[0].children[1].children;assert.match(details[2].textContent,/unstitched/);delete globalThis.document;
+});

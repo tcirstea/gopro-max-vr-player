@@ -44,7 +44,7 @@ export function playlistLayout(playlist={},mode='list',requestedPage=0){
   {action:'view',label:mode==='list'?'Grid view':'List view',x:.28,y:.08,w:.27,h:.075},
   {action:'direction',label:playlist?.descending?'Descending ↓':'Ascending ↑',x:.58,y:.08,w:.38,h:.075}
  ];
- const sorts=[['added','Added #'],['name','Filename'],['size','File size'],['dateTaken','Date taken'],['fileCreated','File created']];
+ const sorts=[['added','Added #'],['name','Filename'],['size','File size'],['dateTaken','File date'],['fileCreated','File created']];
  sorts.forEach(([key,label],i)=>targets.push({action:`sort:${key}`,label:(playlist?.sort===key?'• ':'')+label,x:.04+i*.186,y:.18,w:.177,h:.07}));
  items.slice(page*count,(page+1)*count).forEach((item,i)=>targets.push({action:`item:${item.id}`,item,x:mode==='grid'?.04+(i%3)*.313:.04,y:mode==='grid'?.28+Math.floor(i/3)*.29:.28+i*.12,w:mode==='grid'?.294:.92,h:mode==='grid'?.27:.105}));
  if(page>0)targets.push({action:'page-prev',label:'Previous page',x:.04,y:.9,w:.29,h:.075});
@@ -108,7 +108,7 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
   }
   if(!playlist.items?.length)text('Add videos to your playlist to browse them here.',80,370,28);
   if(playlist.sort==='fileCreated')text('File creation dates unavailable in this browser; keeping added order.',40,681,21);
-  else if(playlist.sort==='dateTaken')text('Embedded movie/media creation dates; unavailable dates sort last.',40,681,21);
+  else if(playlist.sort==='dateTaken')text('Embedded creation dates (timezone unverified); unknown dates last.',40,681,21);
   text(`Page ${page+1} / ${pages}`,420,736,22);
  }
 

@@ -1,4 +1,5 @@
 import {playlistDate, playlistSize} from './playlist-model.js';
+import {formatTime} from './inspect.js';
 
 // A native dialog on desktop, paired with the world-space panel in WebXR.
 // Filenames always enter the DOM as text, never HTML. Thumbnails stay local.
@@ -36,12 +37,20 @@ export function createPlaylistBrowser({getState, onSelect, onSort, onDirection})
         context.drawImage(item.thumbnail, (256 - w) / 2, (144 - h) / 2, w, h);
       } else {
         context.fillStyle = '#a5babc'; context.font = '16px sans-serif'; context.textAlign = 'center';
-        context.fillText(item.thumbnailDone ? 'Preview unavailable' : 'Preview pending', 128, 77);
+        context.fillText(item.thumbnailDone ? 'No supported preview' : state.generateThumbnails ? 'Preview pending' : 'Generation off', 128, 77);
       }
       const description = document.createElement('span'), title = document.createElement('strong'), detail = document.createElement('span');
       title.textContent = `${item.added}. ${item.name}`;
-      detail.textContent = `${playlistSize(item.size)} · Taken: ${playlistDate(item.dateTaken)} · File created: ${playlistDate(item.fileCreated)}`;
-      description.append(title, detail); button.append(preview, description);
+      detail.textContent = `${playlistSize(item.size)} · Embedded creation: ${playlistDate(item.dateTaken)} · File created: ${playlistDate(item.fileCreated)}`;
+      const source = document.createElement('span');
+      source.textContent = item.thumbnailSource || (item.thumbnailDone ? (state.generateThumbnails ? 'Preview unavailable' : 'Preview generation is off') : 'Reading local file info…');
+      if (item.dateTakenSource) detail.title = item.dateTakenSource;
+      const media = document.createElement('span');
+      const tracks = item.videoTracks || [];
+      const dimensions = tracks[0]?.width && tracks[0]?.height ? `${tracks[0].width} × ${tracks[0].height}${tracks.length > 1 ? ` per track · ${tracks.length} video tracks` : ''}` : null;
+      media.textContent = [item.cameraModel, item.cameraFirmware ? `Firmware ${item.cameraFirmware}` : null, Number.isFinite(item.duration) ? formatTime(item.duration) : null, dimensions, tracks[0]?.codec].filter(Boolean).join(' · ');
+      if (item.dateTakenSource) source.textContent += ` · ${item.dateTakenSource}`;
+      description.append(title, detail, source, media); button.append(preview, description);
       button.addEventListener('click', () => { close(); onSelect(item.id); });
       return button;
     }));

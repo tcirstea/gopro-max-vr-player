@@ -13,3 +13,8 @@ test('natural filename sorting and unknown numeric metadata preserve determinist
  assert.deepEqual(sortPlaylistEntries(a,'size',true).map(x=>x.name),['c10','c1','c2']);
  assert.deepEqual(sortPlaylistEntries(a,'unsupported'),a);assert.deepEqual(a.map(x=>x.added),[1,2,3]);
 });
+test('embedded clock display does not invent UTC or apply a browser timezone shift',()=>{
+ const old=process.env.TZ;
+ try{process.env.TZ='America/Los_Angeles';assert.equal(playlistDate(Date.UTC(2024,3,15,12)), '2024-04-15 12:00:00 (timezone unverified)');}
+ finally{if(old===undefined)delete process.env.TZ;else process.env.TZ=old;}
+});

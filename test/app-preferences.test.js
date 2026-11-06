@@ -55,3 +55,19 @@ test('VR mute shares browser preference across native, flat, silent, and pending
  assert.equal(h.players.at(-1).muted,false);assert.equal(h.panelState.muted,false);assert.equal(h.players.at(-1).audioState.mode,'ambisonic');assert.equal(h.players.at(-1).volume,.35);
  h.element('demo').handlers.click();assert.equal(h.panelState.muted,false);
 });
+test('browser audio preference is selectable before loading or while unsupported, without unmuting', async()=>{
+ const h=harness();h.change('audio-mode','ambisonic');
+ assert.equal(h.element('audio-mode').hidden,false);assert.equal(h.element('muted').checked,true);
+ await h.open('stereo',{stereo:true});assert.equal(h.players.at(-1).audioState.mode,'stereo');assert.equal(h.element('audio-mode').value,'ambisonic');assert.match(h.element('audio-mode-note').textContent,/unavailable/);
+ h.change('audio-mode','stereo');assert.equal(h.element('audio-mode').value,'stereo');
+ await h.open('silent',{silent:true});h.change('audio-mode','ambisonic');assert.match(h.element('audio-mode-note').textContent,/unavailable/);
+ await h.open('spatial');assert.equal(h.players.at(-1).audioState.mode,'ambisonic');assert.equal(h.players.at(-1).muted,true);
+ h.change('audio-mode','invalid');assert.equal(h.players.at(-1).audioState.mode,'ambisonic');
+});
+test('identical frame audio state does not repeatedly mutate the live status region', async()=>{
+ const h=harness();await h.open('one');const note=h.element('audio-mode-note');let value=note.textContent,writes=0;
+ Object.defineProperty(note,'textContent',{get:()=>value,set:v=>{value=v;writes++;}});
+ const player=h.players[0],state={audio:player.audioState,currentTime:1,duration:10,playing:true};
+ player.callbacks.onState(state);player.callbacks.onState({...state,currentTime:2});assert.equal(writes,0);
+ h.change('audio-mode','ambisonic');assert.equal(writes,1);player.callbacks.onState({...state,currentTime:3});assert.equal(writes,1);
+});

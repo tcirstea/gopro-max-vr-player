@@ -1,5 +1,6 @@
 // Local-only playlist inspection. File.lastModified is NOT a creation date.
 import {readMovie, children, descend} from './inspect.js';
+import {readGoProInfo} from './gopro-info.js';
 import {demuxNative, createSampleReader} from './native-demux.js';
 const QUICKTIME_EPOCH_SECONDS = 2082844800;
 const THUMBNAIL_SIZE = 320;
@@ -16,17 +17,51 @@ function embeddedDate(view, box) {
   return date >= Date.UTC(1970, 0, 1) && date <= Date.now() + 86400000 ? date : null;
 }
 
+function mediaDuration(view, box) {
+  if (!box || box.start + 20 > box.end) return null;
+  const version = view.getUint8(box.start);
+  if (version > 1 || (version === 1 && box.start + 32 > box.end)) return null;
+  const scale = view.getUint32(box.start + (version ? 20 : 12));
+  const ticks = version ? Number(view.getBigUint64(box.start + 24)) : view.getUint32(box.start + 16);
+  return scale && Number.isSafeInteger(ticks) && ticks > 0 ? ticks / scale : null;
+}
+
 export async function readPlaylistMetadata(file) {
-  const result = {dateTaken: null, dateTakenSource: null, fileCreated: null};
+  const result = {dateTaken: null, dateTakenSource: null, fileCreated: null,
+    cameraModel: null, cameraFirmware: null, duration: null, videoTracks: [], nativeCandidate: false};
   try {
     const {moov} = await readMovie(file);
     const boxes = children(moov, 0, moov.byteLength);
-    const movieDate = embeddedDate(moov, boxes.find(b => b.type === 'mvhd'));
-    if (movieDate !== null) return {...result, dateTaken: movieDate, dateTakenSource: 'Embedded movie creation time'};
-    for (const track of boxes.filter(b => b.type === 'trak')) {
-      const mediaDate = embeddedDate(moov, descend(moov, track, ['mdia', 'mdhd']));
-      if (mediaDate !== null) return {...result, dateTaken: mediaDate, dateTakenSource: 'Embedded media creation time'};
+    const movie = boxes.find(b => b.type === 'mvhd');
+    // Static metadata only. Timed GPMF (including GPS) is not scanned for the gallery.
+    for (const userData of boxes.filter(b => b.type === 'udta')) {
+      try {
+        const gpmf = children(moov, userData.start, userData.end).find(b => b.type === 'GPMF');
+        const camera = readGoProInfo(moov, gpmf);
+        for (const key of ['cameraModel', 'cameraFirmware']) if (camera[key] !== null) result[key] = camera[key];
+      } catch { /* Malformed optional user data does not hide usable media info. */ }
     }
+    result.dateTaken = embeddedDate(moov, movie);
+    if (result.dateTaken !== null) result.dateTakenSource = 'Embedded movie creation time (timezone unverified)';
+    result.duration = mediaDuration(moov, movie);
+    for (const track of boxes.filter(b => b.type === 'trak')) {
+      // A malformed optional track must not suppress other available file info.
+      try {
+        const media = descend(moov, track, ['mdia', 'mdhd']);
+        const mediaDate = embeddedDate(moov, media);
+        if (result.dateTaken === null && mediaDate !== null) {
+          result.dateTaken = mediaDate; result.dateTakenSource = 'Embedded media creation time (timezone unverified)';
+        }
+        const handler = descend(moov, track, ['mdia', 'hdlr']);
+        if (!handler || handler.start + 12 > handler.end || moov.getUint32(handler.start + 8) !== 0x76696465) continue;
+        const stsd = descend(moov, track, ['mdia', 'minf', 'stbl', 'stsd']);
+        const entry = stsd && stsd.start + 8 <= stsd.end ? children(moov, stsd.start + 8, stsd.end)[0] : null;
+        if (!entry || entry.start + 28 > entry.end) continue;
+        result.videoTracks.push({codec: entry.type, width: moov.getUint16(entry.start + 24), height: moov.getUint16(entry.start + 26)});
+        result.duration ??= mediaDuration(moov, media);
+      } catch { /* Keep metadata from the other tracks. */ }
+    }
+    result.nativeCandidate = result.videoTracks.length === 2 && result.videoTracks.every(t => ['hvc1', 'hev1'].includes(t.codec) && t.width === 4096 && t.height === 1344);
   } catch { /* Unsupported or malformed metadata stays unknown. */ }
   return result;
 }
@@ -127,8 +162,8 @@ async function nativeThumbnail(file, signal) {
 
 // Call sequentially while playback is paused; abort on play/removal/navigation.
 // A timeout or abort returns null, so callers can retain their neutral placeholder.
-export async function createPlaylistThumbnail(file, {signal} = {}) {
-  if (signal?.aborted || typeof document === 'undefined') return null;
+export async function createPlaylistThumbnail(file, {signal, generate = false, metadata} = {}) {
+  if (!generate || signal?.aborted || typeof document === 'undefined') return null;
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort, {once: true});
@@ -139,8 +174,11 @@ export async function createPlaylistThumbnail(file, {signal} = {}) {
     timer = setTimeout(abort, TIMEOUT_MS);
   });
   try {
-    const task = /\.360$/i.test(file.name || '') ? nativeThumbnail(file, controller.signal) : browserThumbnail(file, controller.signal);
-    return await Promise.race([task, stopped]);
+    const native = metadata?.nativeCandidate || /\.360(?:\.mp4)?$/i.test(file.name || '');
+    const task = native ? nativeThumbnail(file, controller.signal) : browserThumbnail(file, controller.signal);
+    const thumbnail = await Promise.race([task, stopped]);
+    if (thumbnail) thumbnail.thumbnailSource = native ? 'Generated native keyframe near midpoint (unstitched)' : 'Generated midpoint frame';
+    return thumbnail;
   } catch { return null; }
   finally {
     clearTimeout(timer);

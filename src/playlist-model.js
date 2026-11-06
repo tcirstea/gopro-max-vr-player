@@ -17,7 +17,9 @@ export function sortPlaylistEntries(entries, key = 'added', descending = false) 
   });
 }
 export function playlistDate(value) {
-  return Number.isFinite(value) ? new Date(value).toLocaleString() : 'Unavailable';
+  // Container fields are often camera-local despite the format's UTC convention.
+  // Preserve their written clock values instead of silently applying browser timezone.
+  return Number.isFinite(value) ? new Date(value).toISOString().slice(0, 19).replace('T', ' ') + ' (timezone unverified)' : 'Unavailable';
 }
 export function playlistSize(value) {
   return Number.isFinite(value) ? `${(value / 1024 / 1024).toFixed(1)} MiB` : 'Unknown size';

@@ -24,7 +24,7 @@ function setup({metadata = async () => ({}), thumbnail = async () => null} = {})
   }
   const context = vm.createContext({createPlaylistEntries, sortPlaylistEntries, PLAYLIST_SORTS, AbortController,
     createPlaylistBrowser: () => ({render() {}, close() { closes++; }}), readPlaylistMetadata: metadata,
-    createPlaylistThumbnail: (file, options) => { previews.push({file, signal: options.signal}); return thumbnail(file, options); },
+    createPlaylistThumbnail: (file, options) => { previews.push({file, ...options}); return thumbnail(file, options); },
     document: {getElementById: el, createElement: () => ({})}, window: {addEventListener: (name, fn) => { windows[name] = fn; }},
     URL: {createObjectURL: () => 'blob:synthetic', revokeObjectURL() {}},
     createRenderer: () => ({setSource() {}, setMaxSources() {}, hideXRControls() { hides++; }}), demoPanorama: () => ({}), formatTime: String,
@@ -112,4 +112,26 @@ test('pending playback from an old clip cannot suppress new previews or clear a 
   const newPlay = h.context.togglePlayback();
   old.resolve(); await oldPlay; assert.equal(vm.runInContext('pendingPlayback', h.context), 1);
   current.resolve(); await newPlay; assert.equal(vm.runInContext('pendingPlayback', h.context), 0);
+});
+test('thumbnail generation defaults off, retries missing previews on opt-in, and retains completed ones', async()=>{
+ const h=setup({thumbnail:async(_file,{generate})=>generate?{thumbnailSource:'Generated midpoint frame'}:null});
+ await h.context.setPlaylist(files);await flush();
+ assert.equal(h.el('generate-thumbnails').checked,false);assert.ok(h.previews.every(p=>p.generate===false));assert.ok(h.state().items.every(item=>item.thumbnailDone&&!item.thumbnail));
+ h.el('generate-thumbnails').checked=true;h.el('generate-thumbnails').emit('change');await flush();
+ assert.equal(h.previews.length,4);assert.ok(h.state().items.every(item=>item.thumbnail&&item.thumbnailSource==='Generated midpoint frame'));
+ h.el('generate-thumbnails').checked=false;h.el('generate-thumbnails').emit('change');await flush();assert.equal(h.previews.length,4);assert.ok(h.state().items.every(item=>item.thumbnail));
+ await h.context.setPlaylist([files[0]]);await flush();assert.equal(h.previews.at(-1).generate,false);assert.equal(h.state().items[0].thumbnail,null);
+});
+test('turning generation off cancels the active decoder and discards its late result', async()=>{
+ const pending=deferred();const h=setup({thumbnail:(_file,{generate})=>generate?pending.promise:Promise.resolve(null)});
+ await h.context.setPlaylist(files);await flush();h.el('generate-thumbnails').checked=true;h.el('generate-thumbnails').emit('change');await flush();
+ const active=h.previews.at(-1);assert.equal(active.generate,true);
+ h.el('generate-thumbnails').checked=false;h.el('generate-thumbnails').emit('change');assert.equal(active.signal.aborted,true);
+ pending.resolve({thumbnailSource:'stale generated preview'});await flush();assert.ok(h.state().items.every(item=>item.thumbnail===null));assert.equal(h.previews.at(-1).generate,false);
+});
+test('browser-only settings do not add XR setting actions or reset play/view preferences', async()=>{
+ const h=setup();await h.context.setPlaylist(files);await flush();h.players[0].playing=true;
+ h.el('generate-thumbnails').checked=true;h.el('generate-thumbnails').emit('change');await flush();assert.equal(h.previews.length,2);
+ assert.equal(h.players.length,1);assert.equal(h.hides(),0);assert.equal(h.players[0].playing,true);
+ h.players[0].playing=false;h.context.schedulePreviews();await flush();assert.equal(h.previews.length,4);
 });
