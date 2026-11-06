@@ -1,5 +1,4 @@
 import {playlistDate, playlistSize} from './playlist-model.js';
-import {formatTime} from './inspect.js';
 
 // A native dialog on desktop, paired with the world-space panel in WebXR.
 // Filenames always enter the DOM as text, never HTML. Thumbnails stay local.
@@ -32,29 +31,26 @@ export function createPlaylistBrowser({getState, onSelect, onSort, onDirection})
     list.replaceChildren(...state.items.slice(page * pageSize, (page + 1) * pageSize).map(item => {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'playlist-item';
       button.dataset.clipId = item.id; button.setAttribute('aria-current', String(item.id === state.selectedId));
-      const preview = document.createElement('canvas'); preview.width = 320; preview.height = 180;
+      // Widen the drawing surface as well as its CSS box. A fixed 16:9 canvas
+      // would otherwise keep wide native previews small inside the larger box.
+      const large = !grid && state.doubleHeightRows;
+      const preview = document.createElement('canvas'); preview.width = large ? 640 : 320; preview.height = large ? 280 : 180;
       preview.setAttribute('aria-hidden', 'true'); const context = preview.getContext('2d');
-      context.fillStyle = '#172c30'; context.fillRect(0, 0, 320, 180);
+      context.fillStyle = '#172c30'; context.fillRect(0, 0, preview.width, preview.height);
       if (item.thumbnail) {
-        const scale = Math.min(320 / item.thumbnail.width, 180 / item.thumbnail.height);
+        const scale = Math.min(preview.width / item.thumbnail.width, preview.height / item.thumbnail.height);
         const w = item.thumbnail.width * scale, h = item.thumbnail.height * scale;
-        context.drawImage(item.thumbnail, (320 - w) / 2, (180 - h) / 2, w, h);
+        context.drawImage(item.thumbnail, (preview.width - w) / 2, (preview.height - h) / 2, w, h);
       } else {
-        context.fillStyle = '#a5babc'; context.font = '16px sans-serif'; context.textAlign = 'center';
-        context.fillText(item.thumbnailDone ? 'No supported preview' : state.generateThumbnails ? 'Preview pending' : 'Generation off', 160, 95);
+        context.fillStyle = '#a5babc'; context.font = `${large ? 24 : 16}px sans-serif`; context.textAlign = 'center';
+        context.fillText(item.thumbnailDone ? 'No supported preview' : state.generateThumbnails ? 'Preview pending' : 'Generation off', preview.width / 2, preview.height / 2 + 5);
       }
-      const description = document.createElement('span'), title = document.createElement('strong'), detail = document.createElement('span');
+      const description = document.createElement('span'), title = document.createElement('strong');
+      const size = document.createElement('span'), date = document.createElement('span');
       title.textContent = `${item.added}. ${item.name}`;
-      detail.textContent = `${playlistSize(item.size)} · Embedded creation: ${playlistDate(item.dateTaken)} · File created: ${playlistDate(item.fileCreated)}`;
-      const source = document.createElement('span');
-      source.textContent = item.thumbnailSource || (item.thumbnailDone ? (state.generateThumbnails ? 'Preview unavailable' : 'Preview generation is off') : 'Reading local file info…');
-      if (item.dateTakenSource) detail.title = item.dateTakenSource;
-      const media = document.createElement('span');
-      const tracks = item.videoTracks || [];
-      const dimensions = tracks[0]?.width && tracks[0]?.height ? `${tracks[0].width} × ${tracks[0].height}${tracks.length > 1 ? ` per track · ${tracks.length} video tracks` : ''}` : null;
-      media.textContent = [item.cameraModel, item.cameraFirmware ? `Firmware ${item.cameraFirmware}` : null, Number.isFinite(item.duration) ? formatTime(item.duration) : null, dimensions, tracks[0]?.codec].filter(Boolean).join(' · ');
-      if (item.dateTakenSource) source.textContent += ` · ${item.dateTakenSource}`;
-      description.append(title, detail, source, media); button.append(preview, description);
+      size.textContent = playlistSize(item.size);
+      date.textContent = playlistDate(item.dateTaken);
+      description.append(title, size, date); button.append(preview, description);
       button.addEventListener('click', () => { close(); onSelect(item.id); });
       return button;
     }));

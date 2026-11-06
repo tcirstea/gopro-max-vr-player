@@ -1,5 +1,6 @@
 // World-anchored, stereo WebXR transport. All positions are in reference-space
 // metres, independent of panorama zoom/drag. No DOM overlay support is required.
+import {playlistDate, playlistSize} from './playlist-model.js';
 const WIDTH=1.2, HEIGHT=.375;
 // Shared layout keeps rendered buttons and ray targets in lockstep.
 const BUTTONS=['previous','play','next','mute','exit'].map((action,i)=>({action,left:.04+i*.192,width:.16}));
@@ -95,26 +96,30 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
  function paintPlaylist(state){
   const {targets,pages}=layout(state),playlist=state.playlist||{};
   ctx.fillStyle='#11232c';ctx.fillRect(0,0,1024,768);
-  const text=(label,x,y,size=26)=>{ctx.font=`${size}px sans-serif`;ctx.fillStyle='#eef8fa';ctx.textAlign='left';ctx.fillText(label,x,y);};
+  const text=(label,x,y,size=26,maxWidth)=>{ctx.font=`${size}px sans-serif`;ctx.fillStyle='#eef8fa';ctx.textAlign='left';if(maxWidth===undefined)ctx.fillText(label,x,y);else ctx.fillText(label,x,y,maxWidth);};
   text(`Playlist · ${playlist.items?.length||0} videos`,34,42,30);
   for(const target of targets){
    const {action,x,y,w,h,item}=target,px=x*1024,py=y*768,pw=w*1024,ph=h*768;
    ctx.fillStyle=hover?.target===action?'#3f7284':item&&item.id===playlist.selectedId?'#305c62':'#263f4a';ctx.fillRect(px,py,pw,ph);
    if(item){
-    const rowScale=playlist.doubleHeightRows?2:1,tw=viewMode==='grid'?pw-16:108*rowScale,th=viewMode==='grid'?ph-48:(.105*768-12)*rowScale;
+    const rowScale=playlist.doubleHeightRows?2:1,tw=viewMode==='grid'?pw-16:108*rowScale*rowScale,th=viewMode==='grid'?ph-88:ph-12;
     ctx.fillStyle='#142d37';ctx.fillRect(px+8,py+6,tw,th);
     if(item.thumbnail)try{
      const scale=Math.min(tw/item.thumbnail.width,th/item.thumbnail.height),iw=item.thumbnail.width*scale,ih=item.thumbnail.height*scale;
      ctx.drawImage(item.thumbnail,px+8+(tw-iw)/2,py+6+(th-ih)/2,iw,ih);
     }catch{/* A pending thumbnail keeps its placeholder. */}
     if(!item.thumbnail)text('▶',px+tw/2,py+th/2+12,28);
-    const tx=viewMode==='grid'?px+10:px+tw+20,ty=viewMode==='grid'?py+ph-17:py+ph/2+9;
-    const max=viewMode==='grid'?22:rowScale===2?44:52;const name=`${item.added?item.added+'. ':''}${String(item.name||'Untitled')}`;text(name.length>max?name.slice(0,max-1)+'…':name,tx,ty,24);
+    const tx=viewMode==='grid'?px+10:px+tw+20,available=px+pw-tx-12;
+    const ty=viewMode==='grid'?py+ph-59:py+ph/2-(rowScale===2?22:18),gap=viewMode==='list'&&rowScale===2?28:22;
+    const max=Math.floor(available/14),name=`${item.added?item.added+'. ':''}${String(item.name||'Untitled')}`;
+    text(name.length>max?name.slice(0,max-1)+'…':name,tx,ty,24,available);
+    text(playlistSize(item.size),tx,ty+gap,18,available);
+    text(playlistDate(item.dateTaken),tx,ty+gap*2,18,available);
    }else{text(target.label,px+12,py+ph/2+9,23);}
   }
   if(!playlist.items?.length)text('Add videos to your playlist to browse them here.',80,370,28);
   if(playlist.sort==='fileCreated')text('File creation dates unavailable in this browser; keeping added order.',40,681,21);
-  else if(playlist.sort==='dateTaken')text('Embedded creation dates (timezone unverified); unknown dates last.',40,681,21);
+  else text('Dates shown as stored; timezone unverified. Unknown dates last.',40,681,21);
   text(`Page ${page+1} / ${pages}`,420,736,22);
  }
 

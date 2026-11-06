@@ -139,13 +139,13 @@ test('large VR rows double height, halve thumbnail density and preserve ray targ
  }
  assert.deepEqual(playlistLayout({items,doubleHeightRows:true},'grid'),playlistLayout({items},'grid'));
 });
-test('VR thumbnails grow in both dimensions without stretching and new density repaints',t=>{
+test('wide VR previews use twice the previous large width without stretching and density repaints',t=>{
  const h=harness(t),images=[],labels=[];h.ctx.drawImage=(...args)=>images.push(args);h.ctx.fillText=text=>labels.push(text);
- h.state.playlist={items:Array.from({length:6},(_,id)=>({id,name:`clip ${id}`,thumbnail:{width:320,height:180}})),version:1};
+ h.state.playlist={items:Array.from({length:6},(_,id)=>({id,name:`clip ${id}`,thumbnail:{width:320,height:105}})),version:1};
  const click=openPlaylist(h),view={projectionMatrix:identity(),transform:{inverse:{matrix:identity()}}};
  h.panel.draw(view);const normal=images[0];assert.equal(images.length,5);
  images.length=0;h.state.playlist.doubleHeightRows=true;h.panel.draw(view);assert.equal(images.length,2);
- assert.equal(images[0][3],normal[3]*2);assert.equal(images[0][4],normal[4]*2);assert.equal(images[0][3]/images[0][4],320/180);
+ assert.equal(images[0][3],normal[3]*4);assert.equal(images[0][4],normal[4]*4);assert.equal(images[0][3]/images[0][4],320/105);
  click(.8,.94);h.panel.draw(view);assert.ok(labels.includes('Page 2 / 3'));
  click(.1,.33);assert.deepEqual(h.actions.at(-1),['playlist-select',2]);
 });
@@ -154,4 +154,26 @@ test('VR density change cancels held item capture before a moved row can be sele
  openPlaylist(h);h.aim(h.right,.1,.5+(.32-.5)*.9/.375);h.trigger(h.right,true);
  h.state.playlist.doubleHeightRows=true;h.trigger(h.right,false);assert.deepEqual(h.actions,[]);
  h.trigger(h.right,true);h.trigger(h.right,false);assert.deepEqual(h.actions,[['playlist-select',0]]);
+});
+
+
+test('VR filename, size and plain date occupy separate bounded lines in normal, large and grid views',t=>{
+ const h=harness(t),labels=[],images=[];h.ctx.fillText=(...args)=>labels.push(args);h.ctx.drawImage=(...args)=>images.push(args);
+ h.state.playlist={items:[{id:'a',name:'A very long filename '.repeat(20),added:1,size:2*1048576,dateTaken:Date.UTC(2024,3,15,12),thumbnail:{width:320,height:180}}],version:1};
+ const click=openPlaylist(h),view={projectionMatrix:identity(),transform:{inverse:{matrix:identity()}}};
+ for(const mode of ['normal','large','grid']){
+  if(mode==='large')h.state.playlist.doubleHeightRows=true;
+  if(mode==='grid')click(.4,.11);
+  labels.length=0;images.length=0;h.panel.draw(view);
+  const title=labels.find(a=>a[0].startsWith('1. A very')),size=labels.find(a=>a[0]==='2.0 MiB'),date=labels.find(a=>a[0]==='2024-04-15 12:00:00');
+  assert.ok(title&&size&&date,mode);assert.ok(title[0].endsWith('…'));
+  assert.equal(title[1],size[1]);assert.equal(size[1],date[1]);assert.ok(title[2]<size[2]&&size[2]<date[2]);
+  const right=(mode==='grid'?.04+.294:.96)*1024,bottom=(.28+(mode==='grid'?.27:mode==='large'?.21:.105))*768;
+  for(const label of [title,size,date]){assert.ok(label[1]+label[3]<=right);assert.ok(label[2]<bottom);}
+  assert.equal(images.length,1);assert.ok(Math.abs(images[0][3]/images[0][4]-320/180)<1e-10);
+  if(mode==='grid')assert.ok(images[0][2]+images[0][4]<title[2]-20);
+  else assert.ok(images[0][1]+images[0][3]<title[1]);
+  assert.ok(!labels.some(a=>/Embedded|Firmware|codec|unstitched/.test(a[0])));
+ }
+ labels.length=0;h.state.playlist.items[0].dateTaken=null;h.state.playlist.version++;h.panel.draw(view);assert.ok(labels.some(a=>a[0]==='Date unavailable'));
 });

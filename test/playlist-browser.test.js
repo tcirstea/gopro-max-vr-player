@@ -1,5 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {createPlaylistBrowser} from '../src/playlist-browser.js';
 import {createPlaylistEntries,sortPlaylistEntries} from '../src/playlist-model.js';
 function harness(count=15){
@@ -11,7 +12,7 @@ function harness(count=15){
   append(...nodes){this.children.push(...nodes);}
   replaceChildren(...nodes){this.children=nodes;}
   focus(){document.activeElement=this;}
-  getContext(){return {fillRect(){},fillText(){},drawImage(){}};}
+  getContext(){this.draws??=[];this.labels??=[];return {fillRect(){},fillText:(...args)=>this.labels.push(args),drawImage:(...args)=>this.draws.push(args)};}
   showModal(){this.open=true;}
   close(){this.open=false;}
   getBoundingClientRect(){return {left:10,right:100,top:10,bottom:100};}
@@ -43,13 +44,39 @@ test('close and reopen, thumbnail repaint focus, shrinking queue and backdrop di
  h.el('playlist-window').handlers.click({target:h.el('playlist-window'),clientX:0,clientY:0});assert.equal(h.el('playlist-window').open,false);
  delete globalThis.document;
 });
-test('gallery labels local metadata, timezone uncertainty and experimental preview state without HTML',()=>{
- const h=harness(1),item=h.state.items[0];Object.assign(item,{cameraModel:'<Camera>',cameraFirmware:'TEST.01',duration:95,videoTracks:[{width:4096,height:1344,codec:'hvc1'},{width:4096,height:1344,codec:'hvc1'}],dateTaken:Date.UTC(2024,0,1,12),dateTakenSource:'Embedded movie creation time (timezone unverified)',thumbnailDone:true});
- h.browser.open();let details=h.el('playlist-items').children[0].children[1].children;
- assert.match(details[1].textContent,/2024-01-01 12:00:00 \(timezone unverified\)/);assert.match(details[2].textContent,/Preview generation is off/);assert.match(details[3].textContent,/<Camera> · Firmware TEST.01 · 1:35 · 4096 × 1344 per track · 2 video tracks · hvc1/);
- h.state.generateThumbnails=true;h.state.version++;h.browser.render();details=h.el('playlist-items').children[0].children[1].children;assert.match(details[2].textContent,/Preview unavailable/);
- item.thumbnailDone=false;h.state.version++;h.browser.render();details=h.el('playlist-items').children[0].children[1].children;assert.match(details[2].textContent,/Reading local file info/);
- item.thumbnailDone=true;item.thumbnailSource='Generated native keyframe near midpoint (unstitched)';h.state.version++;h.browser.render();details=h.el('playlist-items').children[0].children[1].children;assert.match(details[2].textContent,/unstitched/);delete globalThis.document;
+test('gallery shows only filename, size and a plain stored date on separate lines in both layouts',()=>{
+ const h=harness(1),item=h.state.items[0];Object.assign(item,{size:1048576,cameraModel:'<Camera>',cameraFirmware:'TEST.01',duration:95,videoTracks:[{width:4096,height:1344,codec:'hvc1'},{width:4096,height:1344,codec:'hvc1'}],dateTaken:Date.UTC(2024,0,1,12),dateTakenSource:'Embedded movie creation time (timezone unverified)',thumbnailDone:true,thumbnailSource:'Generated native keyframe near midpoint (unstitched)'});
+ h.browser.open();
+ const read=()=>h.el('playlist-items').children[0].children[1].children.map(node=>node.textContent);
+ const expected=['1. <img src=x onerror=alert(1)>','1.0 MiB','2024-01-01 12:00:00'];
+ assert.deepEqual(read(),expected);
+ h.state.generateThumbnails=true;h.state.version++;h.browser.render();assert.deepEqual(read(),expected);
+ h.el('playlist-layout').click();assert.deepEqual(read(),expected);
+ item.dateTaken=null;h.state.version++;h.browser.render();assert.deepEqual(read(),[expected[0],expected[1],'Date unavailable']);
+ delete globalThis.document;
+});
+
+test('larger browser previews widen the actual drawing area, preserve aspect and leave grid unchanged',()=>{
+ const h=harness(1);h.state.items[0].thumbnail={width:320,height:105};h.browser.open();
+ const canvas=()=>h.el('playlist-items').children[0].children[0];
+ const normal=canvas();assert.equal(normal.width,320);assert.equal(normal.height,180);
+ h.state.doubleHeightRows=true;h.browser.render();const large=canvas();
+ assert.equal(large.width,640);assert.equal(large.height,280);
+ const [,x,y,w,height]=large.draws[0];assert.equal(w,640);assert.equal(height,210);assert.equal(w/height,320/105);assert.equal(x,0);assert.equal(y,35);
+ assert.equal(large.attrs['aria-hidden'],'true');
+ h.el('playlist-layout').click();assert.equal(canvas().width,normal.width);assert.equal(canvas().height,normal.height);assert.deepEqual(canvas().draws,normal.draws);
+ h.el('playlist-layout').click();h.state.items[0].thumbnail=null;h.state.version++;h.browser.render();assert.deepEqual(canvas().labels[0].slice(1),[320,145]);
+ delete globalThis.document;
+});
+
+test('wide browser previews fit their row, wrap on small screens, and keep the existing dialog size',()=>{
+ const css=readFileSync(new URL('../src/style.css',import.meta.url),'utf8');
+ assert.match(css,/#playlist-window\{[^}]*width:min\(1100px,94vw\)/);
+ assert.match(css,/\.playlist-list\.playlist-large-rows \.playlist-item\{[^}]*min-height:288px;flex-wrap:wrap/);
+ assert.match(css,/\.playlist-list\.playlist-large-rows \.playlist-item canvas\{width:576px;max-width:100%;height:auto;aspect-ratio:16\/7/);
+ assert.match(css,/width:min\(384px,100%\);align-self:center/);
+ assert.match(css,/\.playlist-grid \.playlist-item canvas\{width:100%;height:auto;aspect-ratio:16\/9/);
+ const html=readFileSync(new URL('../index.html',import.meta.url),'utf8');assert.match(html,/<option value="dateTaken">Date<\/option>/);assert.match(html,/timezone unverified/);
 });
 
 test('double-height list rows repaginate, retain focus and leave grid layout unchanged',()=>{
