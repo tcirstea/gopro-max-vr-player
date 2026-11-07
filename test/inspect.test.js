@@ -9,7 +9,7 @@ function track(codec='hvc1',type='vide'){
 const file=(data,name='clip.mp4')=>new File([data],name);
 test('reads track codecs and dimensions',async()=>{const r=await inspectFile(file(box('moov',track())));assert.equal(r.videoTracks[0].codec,'hvc1');assert.equal(r.videoTracks[0].width,4096);assert.equal(r.videoTracks[0].height,1344);assert.equal(r.nativeCandidate,false);});
 test('flags .360 files without assuming equirectangular projection',async()=>assert.equal((await inspectFile(file(box('moov',track()),'GS010001.360'))).nativeCandidate,true));
-test('flags multiple video tracks even when renamed .mp4',async()=>assert.equal((await inspectFile(file(box('moov',track(),track())))).nativeCandidate,true));
+test('MP4 never selects native 360 projection, even with dual MAX-shaped tracks',async()=>assert.equal((await inspectFile(file(box('moov',track(),track())))).nativeCandidate,false));
 test('reads ftyp and skips mdat',async()=>{const r=await inspectFile(file(Buffer.concat([box('ftyp',Buffer.from('mp42')),box('mdat',Buffer.alloc(1000)),box('moov',track('avc1'))])));assert.equal(r.brand,'mp42');assert.equal(r.videoTracks[0].codec,'avc1');});
 test('rejects truncation and invalid box sizes',async()=>{await assert.rejects(()=>inspectFile(file(Buffer.from([0,0,0,2,109,111,111,118]))),/Invalid/);await assert.rejects(()=>inspectFile(file(Buffer.from([0,0,0,99,109,111,111,118]))),/Truncated/);await assert.rejects(()=>inspectFile(file(Buffer.from([0,0,0]))),/Truncated/);});
 test('rejects absent movie metadata',async()=>await assert.rejects(()=>inspectFile(file(box('mdat',Buffer.alloc(1)))),/No MP4/));
@@ -18,3 +18,12 @@ test('does not read video payloads',async()=>{const data=Buffer.concat([box('mda
 test('formats finite time safely',()=>{assert.equal(formatTime(NaN),'0:00');assert.equal(formatTime(-1),'0:00');assert.equal(formatTime(125),'2:05');});
 test('rejects oversized movie metadata without reading it',async()=>{const h=Buffer.alloc(8);h.writeUInt32BE(17*1024*1024);h.write('moov',4);let reads=0;const input={size:17*1024*1024,name:'large.360',slice(){reads++;return new Blob([h]);}};await assert.rejects(()=>inspectFile(input),/16 MiB/);assert.equal(reads,1);});
 test('rejects malformed nested sample entry',async()=>{const data=box('moov',track());data.writeUInt32BE(999999,data.length-36);await assert.rejects(()=>inspectFile(file(data)),/exceeds/);});
+test('browser fallback leaves non-ISO containers to the HTML media decoder, but keeps .360 failures explicit',async()=>{
+ for(const name of ['clip.webm','clip.ogv','clip.mkv','clip.mov','clip.mp4']){
+  const info=await inspectFile(file(Buffer.from('not ISO BMFF'),name),{allowBrowser:true});assert.equal(info.browserFallback,true);assert.equal(info.nativeCandidate,false);
+ }
+ await assert.rejects(inspectFile(file(Buffer.from('bad'),'clip.360'),{allowBrowser:true}),/Truncated/);
+});
+test('multiple ordinary video tracks are not mistaken for the supported MAX layout',async()=>{
+ const info=await inspectFile(file(box('moov',track('avc1'),track('avc1'))),{allowBrowser:true});assert.equal(info.nativeCandidate,false);
+});

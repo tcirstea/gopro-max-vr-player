@@ -1,3 +1,4 @@
+import {createFlatView,flatSize,FLAT_GLSL} from '../src/flat-view.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -16,6 +17,7 @@ function harness({maxTexture=8192,maxRenderbuffer=8192,maxViewport=[8192,8192],p
   getShaderParameter:()=>true,getProgramParameter:()=>true,isContextLost:()=>lost,
   getUniformLocation:(_p,n)=>n,
   uniform1f:(n,v)=>uniforms[n]=v,
+  uniform2fv:(n,v)=>uniforms[n]=Array.from(v),uniform3fv:(n,v)=>uniforms[n]=Array.from(v),
   uniformMatrix3fv:(n,_t,v)=>uniforms[n]=Array.from(v),
   uniformMatrix4fv:(n,_t,v)=>uniforms[n]=Array.from(v),
   getParameter:n=>{queries.push(n);return n==='FRAMEBUFFER_BINDING'?framebuffer:n==='MAX_TEXTURE_SIZE'?maxTexture:n==='MAX_RENDERBUFFER_SIZE'?maxRenderbuffer:n==='MAX_VIEWPORT_DIMS'?maxViewport:null;},
@@ -35,7 +37,7 @@ function harness({maxTexture=8192,maxRenderbuffer=8192,maxViewport=[8192,8192],p
  const views=[{eye:'right',projectionMatrix:identity,transform:{matrix:rightMatrix,inverse:{matrix:identity}}},{eye:'left',projectionMatrix:leftProjection,transform:{matrix:leftMatrix,inverse:{matrix:identity}}}];
  let pose={transform:{matrix:identity},views},controller=identity;
  const frame={session,getViewerPose:()=>pose,getPose:()=>({transform:{matrix:controller}})};
- const context=vm.createContext({createZoomDetents,createXRViewDrag,createXRControls,maxLayout,MAX_GLSL,...quaternions,Event,CustomEvent,Promise,performance,document,navigator:{xr:hasXR?{requestSession:async()=>session}:undefined},requestAnimationFrame:f=>windowFrame=f,devicePixelRatio:pixelRatio,XRWebGLLayer:class{framebuffer='XR';getViewport(view){return viewports[view.eye]||viewports.left;}},createXRPanel:()=>({show(){},toggle(){},reset(){},update(){panelUpdates++;},draw(view){panelDraws.push({view,framebuffer,viewport:[...viewport]});}})});
+ const context=vm.createContext({createFlatView,flatSize,FLAT_GLSL,createZoomDetents,createXRViewDrag,createXRControls,maxLayout,MAX_GLSL,...quaternions,Event,CustomEvent,Promise,performance,document,navigator:{xr:hasXR?{requestSession:async()=>session}:undefined},requestAnimationFrame:f=>windowFrame=f,devicePixelRatio:pixelRatio,XRWebGLLayer:class{framebuffer='XR';getViewport(view){return viewports[view.eye]||viewports.left;}},createXRPanel:()=>({show(){},toggle(){},reset(){},update(){panelUpdates++;},draw(view){panelDraws.push({view,framebuffer,viewport:[...viewport]});}})});
  vm.runInContext(readFileSync(new URL('../src/renderer.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,''),context);
  const renderer=context.createRenderer(canvas);renderer.onBeforeRender(()=>advances++);
  const initialUploads=uploads;
@@ -206,4 +208,40 @@ test('headset quality persists only within the renderer session and does not res
  await h.renderer.enterVR();h.windowTick();assert.equal(h.canvas.width,800);assert.equal(h.canvas.height,500);
  await h.renderer.enterVR();h.tick(60);assert.equal(h.canvas.width,640);assert.equal(h.canvas.height,400);assert.equal(h.events.at(-1).detail.quality,'headset');
  const fresh=harness();fresh.renderer.setDesktopMirror(true);assert.equal(fresh.events.at(-1).detail.quality,'performance');
+});
+
+test('flat video uses a single world screen with separate tracked eye origins and identical mirror placement',async()=>{
+ const h=harness();h.renderer.setSource({videoWidth:1920,videoHeight:1080},{projection:'flat'});h.renderer.setDesktopMirror(true);await h.renderer.enterVR();
+ const head=identity.slice();head[13]=1.6;h.setPose({transform:{matrix:head},views:h.views});h.tick(0);
+ const draws=h.draws.slice(-3);assert.equal(draws.length,3);for(const d of draws){assert.equal(d.uniforms.mode,2);assert.deepEqual(d.uniforms.flatCenter,[0,1.6,-2]);assert.equal(d.uniforms.flatSize[0],3.2);assert.ok(Math.abs(d.uniforms.flatSize[1]-1.8)<1e-9);}
+ assert.notDeepEqual(draws[0].uniforms.viewRotation,draws[1].uniforms.viewRotation);assert.deepEqual(draws[1].uniforms.viewRotation,draws[2].uniforms.viewRotation);
+ assert.deepEqual(draws[1].uniforms.invProjection,draws[2].uniforms.invProjection);
+ const moved=head.slice();moved[12]=1;moved[14]=.5;h.setPose({transform:{matrix:moved},views:h.views});h.tick(20);assert.deepEqual(h.uniforms.flatCenter,[0,1.6,-2]);
+});
+test('flat stick zoom changes distance not FOV; grip cannot rotate it, and click recenters with default distance',async()=>{
+ const h=harness();h.canvasEvents.wheel({deltaY:-100,preventDefault(){}});h.windowTick();const panoramaFov=h.uniforms.fov;
+ h.renderer.setSource({videoWidth:720,videoHeight:1280},{projection:'flat'});await h.renderer.enterVR();h.tick(0);h.input.gamepad.axes[3]=-1;h.tick(50);
+ assert.ok(h.uniforms.flatDistance<2);assert.equal(h.uniforms.fov,panoramaFov);assert.ok(Math.abs(h.uniforms.flatSize[0]/h.uniforms.flatSize[1]-9/16)<1e-9);
+ const center=h.uniforms.flatCenter.slice(),rotation=h.uniforms.flatRotation.slice();h.input.gamepad.axes[3]=0;h.input.gamepad.buttons[1].pressed=true;h.tick(60);
+ const turned=[0,0,-1,0,0,1,0,0,1,0,0,0,4,2,3,1];h.setController(turned);h.setPose({transform:{matrix:turned},views:h.views});h.tick(70);
+ assert.deepEqual(h.uniforms.flatCenter,center);assert.deepEqual(h.uniforms.flatRotation,rotation);
+ h.input.gamepad.buttons[3].pressed=true;h.tick(80);assert.equal(h.uniforms.flatDistance,2);assert.deepEqual(h.uniforms.flatCenter,[2,2,3]);assert.equal(h.uniforms.fov,panoramaFov);
+ // Holding click is not a repeated reset; normal tracked movement continues.
+ h.setPose({transform:{matrix:identity},views:h.views});h.tick(90);assert.deepEqual(h.uniforms.flatCenter,[2,2,3]);
+ h.renderer.setSource(null);h.tick(100);assert.equal(h.uniforms.mode,0);assert.equal(h.uniforms.fov,panoramaFov);
+});
+test('flat reset defers through tracking loss and reanchors when the next valid center pose arrives',async()=>{
+ const h=harness();h.renderer.setSource({videoWidth:100,videoHeight:100},{projection:'flat'});await h.renderer.enterVR();h.tick(0);
+ h.setPose(null);h.renderer.reset();h.tick(20);
+ const matrix=identity.slice();matrix[12]=4;matrix[13]=2;h.setPose({transform:{matrix},views:h.views});h.tick(40);assert.deepEqual(h.uniforms.flatCenter,[4,2,-2]);
+ await h.renderer.enterVR();await h.renderer.enterVR();matrix[12]=6;h.tick(50);assert.deepEqual(h.uniforms.flatCenter,[6,2,-2]);
+});
+test('desktop flat disables pan, roll and keyboard tilt while preserving panorama view preferences',()=>{
+ const h=harness();h.canvasEvents.pointerdown({pointerId:1,button:0,clientX:0,clientY:0});h.canvasEvents.pointermove({pointerId:1,clientX:20,clientY:30});h.canvasEvents.pointerup({pointerId:1});h.windowTick();
+ const yaw=h.uniforms.yaw,pitch=h.uniforms.pitch;h.renderer.setSource({videoWidth:1920,videoHeight:1080},{projection:'flat'});
+ for(const button of [0,2]){h.canvasEvents.pointerdown({pointerId:1,button,clientX:0,clientY:0});h.canvasEvents.pointermove({pointerId:1,clientX:80,clientY:80,buttons:button===2?2:1});h.canvasEvents.pointerup({pointerId:1});}
+ h.canvasEvents.keydown({key:'ArrowUp',preventDefault(){}});h.canvasEvents.wheel({deltaY:-100,preventDefault(){}});h.windowTick();
+ assert.equal(h.uniforms.yaw,yaw);assert.equal(h.uniforms.pitch,pitch);assert.equal(h.uniforms.roll,0);assert.ok(h.uniforms.flatDistance<2);
+ h.canvasEvents.pointerdown({button:1,preventDefault(){}});h.windowTick();assert.equal(h.uniforms.flatDistance,2);
+ h.renderer.setSource(null);h.canvasEvents.keydown({key:'ArrowUp',preventDefault(){}});h.windowTick();assert.equal(h.uniforms.pitch,pitch+.1);
 });

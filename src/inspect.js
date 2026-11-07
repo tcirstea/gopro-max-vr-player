@@ -50,7 +50,7 @@ export async function readMovie(file) {
   if (!moov) throw new Error('No MP4 movie metadata found. Select an MP4 or GoPro .360 file.');
   return {moov, brand};
 }
-export async function inspectFile(file) {
+async function inspectISOFile(file) {
   const {moov, brand} = await readMovie(file);
   const tracks = children(moov, 0, moov.byteLength).filter(b => b.type === 'trak').map(trak => {
     const handler = descend(moov, trak, ['mdia', 'hdlr']);
@@ -61,7 +61,18 @@ export async function inspectFile(file) {
     return {type, codec: entry?.type ?? 'unknown', width: type === 'vide' && entry && entry.start + 28 <= entry.end ? moov.getUint16(entry.start + 24) : null, height: type === 'vide' && entry && entry.start + 28 <= entry.end ? moov.getUint16(entry.start + 26) : null};
   });
   const videoTracks = tracks.filter(t => t.type === 'vide');
-  return {brand, tracks, videoTracks, nativeCandidate: /\.360$/i.test(file.name) || videoTracks.length > 1};
+  return {brand, tracks, videoTracks, nativeCandidate: /\.360$/i.test(file.name)};
+}
+// ISO inspection is useful for MAX selection, not a prerequisite for the
+// browser's own demuxer (WebM, Ogg, and other supported local containers).
+// Explicit .360 files still report inspection errors rather than silently
+// displaying an unstitched track as flat video.
+export async function inspectFile(file, {allowBrowser=false} = {}) {
+  try { return await inspectISOFile(file); }
+  catch (error) {
+    if (!allowBrowser || /\.360$/i.test(file.name || '')) throw error;
+    return {brand:null, tracks:[], videoTracks:[], nativeCandidate:false, browserFallback:true};
+  }
 }
 export function formatTime(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';

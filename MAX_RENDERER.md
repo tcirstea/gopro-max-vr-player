@@ -1,7 +1,11 @@
 # Original MAX renderer integration
 
-`createRenderer(canvas)` retains the equirectangular `setSource`, `refresh`, and
-`reset` API. For paired decoded original MAX video frames:
+`createRenderer(canvas)` retains `setSource`, `refresh`, and `reset`. The default
+`setSource` panorama projection is used by the generated demo; browser video is
+always supplied with `{projection: 'flat'}`. The app does not offer a 360° MP4
+projection mode. Flat sources use an aspect-fit desktop image and a shared
+world-space VR screen with actual per-eye origins. For paired decoded original
+MAX video frames:
 
 ```js
 renderer.setMaxSources(frame0, frame1);

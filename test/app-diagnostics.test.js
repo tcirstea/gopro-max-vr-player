@@ -1,3 +1,4 @@
+import {installDesktopFullscreenControls} from '../src/desktop-fullscreen-controls.js';
 import {resolvePlaylistSeek,readPlaylistSeekDuration} from '../src/playlist-seek.js';
 import {createNextClipPreloader,shouldPreloadNext} from '../src/next-clip-preload.js';
 import {installKeyboardControls} from '../src/keyboard-controls.js';
@@ -14,7 +15,7 @@ test('native diagnostics stay local and source changes clear buffering and diagn
  const player={setMuted(){},setVolume(){},advance(time){advanced.push(time);},playing:true,duration:20,close(){closed++;},getDiagnostics(){return snapshot;}};
  const document={getElementById:element,body:{append(){}},createElement(){return {click(){downloads.push({name:this.download,url:this.href});},remove(){}};}};
  let exported;
- const context=vm.createContext({resolvePlaylistSeek,readPlaylistSeekDuration,createNextClipPreloader,shouldPreloadNext,prepareNextClip:async()=>null,installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document,window:{addEventListener(){}},Blob,URL:{createObjectURL(blob){exported=blob;return 'blob:local-report';},revokeObjectURL(url){revoked.push(url);}},setTimeout(fn){timers.push(fn);},createRenderer:()=>({setSource(){},setMaxSources(){},reset(){},onBeforeRender(callback){frameCallback=callback;}}),demoPanorama:()=>({}),formatTime:n=>`${n}`,inspectFile:async()=>({nativeCandidate:true,brand:'test',tracks:[]}),createNativePlayer:async(file,options)=>{callbacks=options;return player;}});
+ const context=vm.createContext({installDesktopFullscreenControls,resolvePlaylistSeek,readPlaylistSeekDuration,createNextClipPreloader,shouldPreloadNext,prepareNextClip:async()=>null,installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document,window:{addEventListener(){}},Blob,URL:{createObjectURL(blob){exported=blob;return 'blob:local-report';},revokeObjectURL(url){revoked.push(url);}},setTimeout(fn){timers.push(fn);},createRenderer:()=>({setSource(){},setMaxSources(){},reset(){},onBeforeRender(callback){frameCallback=callback;}}),demoPanorama:()=>({}),formatTime:n=>`${n}`,inspectFile:async()=>({nativeCandidate:true,brand:'test',tracks:[]}),createNativePlayer:async(file,options)=>{callbacks=options;return player;}});
  const source=readFileSync(new URL('../src/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
  vm.runInContext(source,context);
  await context.openFile({name:'PRIVATE-FOOTAGE.360',size:100});

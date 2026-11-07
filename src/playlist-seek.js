@@ -85,7 +85,7 @@ export async function readPlaylistSeekDuration(file, {signal} = {}) {
   checkAbort(signal);
   let movie;
   try {
-    const inspection = await inspectFile(file);
+    const inspection = await inspectFile(file,{allowBrowser:true});
     checkAbort(signal);
     if (!inspection.nativeCandidate) return await browserDuration(file, signal);
     // Demux only builds sample tables. Do not prepare inputs, read samples,

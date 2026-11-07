@@ -39,6 +39,6 @@ Synthetic tests cover channel/axis mapping, packet tables, edit trimming, stale 
 
 ## User audio preferences across clips
 
-The app retains mute, normalized volume (0–1), and preferred native audio mode in page-session memory. Native and equirectangular audio share mute/volume. A clip without a requested native mode uses its available default but does not overwrite the preference; silent/unsupported audio similarly leaves preferences intact. New clips remain paused. Native gain is `muted ? 0 : volume`, including after mode switches and context startup. Volume changes never implicitly unmute. No localStorage, media persistence or network transfer is added.
+The app retains mute, normalized volume (0–1), and preferred native audio mode in page-session memory. Native and flat browser-video audio share mute/volume. A clip without a requested native mode uses its available default but does not overwrite the preference; silent/unsupported audio similarly leaves preferences intact. New clips remain paused. Native gain is `muted ? 0 : volume`, including after mode switches and context startup. Volume changes never implicitly unmute. No localStorage, media persistence or network transfer is added.
 
 Audio type is selected under the browser-only **Experimental settings**. The preference can be chosen before loading a clip; the setting explains when a loaded clip uses a supported fallback. Changing audio type never silently unmutes playback.

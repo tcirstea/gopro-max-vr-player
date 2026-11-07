@@ -1,3 +1,4 @@
+import {createFlatView,flatSize,FLAT_GLSL} from '../src/flat-view.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
@@ -16,7 +17,7 @@ test('renderer lazily wires B/Y panel, frame/per-eye rendering, deferred actions
  const input=handedness=>({handedness,gamepad:{mapping:'xr-standard',axes:[0,0,0,0],buttons:Array.from({length:6},()=>({pressed:false}))}});
  const right=input('right'),left=input('left');
  const session={visibilityState:'visible',inputSources:[left,right],renderState:{},async requestReferenceSpace(){return {reference:true};},updateRenderState(s){Object.assign(this.renderState,s);},addEventListener(n,f){sessionEvents[n]=f;},requestAnimationFrame(f){xrFrame=f;},async end(){ends++;sessionEvents.end?.();}};
- const context=vm.createContext({createZoomDetents,createXRViewDrag,createXRControls,maxLayout,MAX_GLSL,...quaternions,Event,CustomEvent,Promise,performance,document:{getElementById:()=>null},navigator:{xr:{requestSession:async()=>{requests++;return session;}}},requestAnimationFrame(){},XRWebGLLayer:class{getViewport(){return {x:0,y:0,width:400,height:300};}},createXRPanel:(_gl,callbacks)=>{
+ const context=vm.createContext({createFlatView,flatSize,FLAT_GLSL,createZoomDetents,createXRViewDrag,createXRControls,maxLayout,MAX_GLSL,...quaternions,Event,CustomEvent,Promise,performance,document:{getElementById:()=>null},navigator:{xr:{requestSession:async()=>{requests++;return session;}}},requestAnimationFrame(){},XRWebGLLayer:class{getViewport(){return {x:0,y:0,width:400,height:300};}},createXRPanel:(_gl,callbacks)=>{
   assert.equal(_gl,gl);created++;options=callbacks;return {show(s){shown.push(s);},toggle(s){toggles.push(s);},reset(){resets++;},update(...args){updates.push(args);if(action){callbacks.onAction(...action);action=null;}},draw(view){draws.push(view);}};
  }});
  vm.runInContext(readFileSync(new URL('../src/renderer.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,''),context);

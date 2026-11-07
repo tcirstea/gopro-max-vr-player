@@ -19,3 +19,16 @@
 /* Hide unrelated desktop labels over the mirrored eye, but retain Reset,
    Full screen and Exit VR so the monitor still controls its session. */
 .xr-mirror-active .viewer-top,.xr-mirror-active .viewer-bottom>div,.xr-mirror-active .crosshair{visibility:hidden}
+
+/* The same transport nodes move into this dock only in desktop fullscreen. */
+#fullscreen-controls{display:none}
+#viewer.desktop-fullscreen #fullscreen-controls{display:flex;flex-direction:column;gap:0;position:absolute;left:max(16px,env(safe-area-inset-left));right:max(16px,env(safe-area-inset-right));bottom:max(16px,env(safe-area-inset-bottom));max-height:calc(100% - 32px);overflow:auto;padding:12px 18px;border:1px solid #66766266;border-radius:12px;background:#101810e8;box-shadow:0 10px 40px #0008;backdrop-filter:blur(12px)}
+#fullscreen-controls .viewer-bottom{position:static;gap:10px;flex-wrap:wrap;justify-content:flex-end;pointer-events:auto}
+#fullscreen-controls .viewer-bottom>div{display:none}
+#fullscreen-controls .transport{padding:12px 0 0;gap:12px;color:#e1e8dc}
+#fullscreen-controls #playlist>span{display:none}
+#fullscreen-controls #playlist-select{min-width:120px}
+#viewer.fullscreen-controls-hidden #fullscreen-controls{opacity:0;visibility:hidden;pointer-events:none}
+#viewer.fullscreen-controls-hidden .viewer-top,#viewer.fullscreen-controls-hidden .crosshair{visibility:hidden}
+#viewer.fullscreen-controls-hidden canvas{cursor:none}
+@media(max-width:650px){#viewer.desktop-fullscreen #fullscreen-controls{left:8px;right:8px;bottom:max(8px,env(safe-area-inset-bottom));padding:10px;max-height:calc(100% - 16px)}#fullscreen-controls .transport{gap:8px}#fullscreen-controls #seek{flex-basis:100%;order:1}#fullscreen-controls button{padding:11px 12px}}

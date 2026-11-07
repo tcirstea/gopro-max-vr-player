@@ -110,25 +110,16 @@ test('gallery reads only bounded static GoPro info and video track facts without
   // Rebuild the moov to add a synthetic user-data atom, never private sample bytes.
   const dataSize = raw.readUInt32BE(0), moov = raw.subarray(dataSize + 8);
   const info = await readPlaylistMetadata(new File([raw.subarray(0, dataSize), box('moov', moov, box('udta', box('GPMF', camera)))], 'renamed.mp4'));
-  assert.equal(info.cameraModel, 'Synthetic Camera'); assert.equal(info.cameraFirmware, 'TEST.01'); assert.equal(info.nativeCandidate, true); assert.equal(info.duration, .2);
+  assert.equal(info.cameraModel, 'Synthetic Camera'); assert.equal(info.cameraFirmware, 'TEST.01'); assert.equal(info.nativeCandidate, false); assert.equal(info.duration, .2);
   assert.deepEqual(info.videoTracks, [{codec:'hvc1', width:4096, height:1344}, {codec:'hvc1', width:4096, height:1344}]);
   assert.doesNotMatch(JSON.stringify(info), /private|SERN/);
 });
-test('native thumbnail dispatch uses verified track metadata for renamed MP4 clips', async () => {
-  let decoders=0,closed=0;
-  class Decoder {
-    static async isConfigSupported(){return {supported:true};}
-    constructor(options){this.options=options;this.state='unconfigured';decoders++;}
-    configure(){this.state='configured';}
-    decode(){this.options.output({displayWidth:4096,displayHeight:1344,close(){}});}
-    async flush(){}
-    close(){this.state='closed';closed++;}
-  }
-  await mockedGlobals({VideoDecoder:Decoder,EncodedVideoChunk:class {},document:{createElement(type){assert.equal(type,'canvas');return {getContext(){return {drawImage(){}};}};}}},async()=>{
-    const file=new File([nativeFile()],'renamed.mp4'),metadata=await readPlaylistMetadata(file);
-    const image=await createPlaylistThumbnail(file,{generate:true,metadata});
-    assert.equal(image.width,320);assert.match(image.thumbnailSource,/native keyframe/);assert.equal(decoders,1);assert.equal(closed,1);
-  });
+test('renamed MAX-shaped MP4 stays on browser thumbnail path, matching flat playback', async () => {
+ let browserReads=0;
+ await mockedGlobals({VideoDecoder:class {constructor(){assert.fail('No native decoder for MP4');}},document:{createElement(type){assert.equal(type,'video');browserReads++;return {pause(){},removeAttribute(){},load(){this.onerror?.();}};}}},async()=>{
+  const file=new File([nativeFile()],'renamed.mp4'),metadata=await readPlaylistMetadata(file);assert.equal(metadata.nativeCandidate,false);
+  assert.equal(await createPlaylistThumbnail(file,{generate:true,metadata}),null);assert.equal(browserReads,1);
+ });
 });
 test('firmware-only metadata is retained and malformed optional user data preserves normal fields', async () => {
   const record=(key,type,data)=>{const h=Buffer.alloc(8),p=Buffer.alloc(Math.ceil(data.length/4)*4);h.write(key);h[4]=type;h[5]=1;h.writeUInt16BE(data.length,6);data.copy(p);return Buffer.concat([h,p]);};

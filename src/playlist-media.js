@@ -61,7 +61,7 @@ export async function readPlaylistMetadata(file) {
         result.duration ??= mediaDuration(moov, media);
       } catch { /* Keep metadata from the other tracks. */ }
     }
-    result.nativeCandidate = result.videoTracks.length === 2 && result.videoTracks.every(t => ['hvc1', 'hev1'].includes(t.codec) && t.width === 4096 && t.height === 1344);
+    result.nativeCandidate = /\.360$/i.test(file.name || '') && result.videoTracks.length === 2 && result.videoTracks.every(t => ['hvc1', 'hev1'].includes(t.codec) && t.width === 4096 && t.height === 1344);
   } catch { /* Unsupported or malformed metadata stays unknown. */ }
   return result;
 }
@@ -174,7 +174,7 @@ export async function createPlaylistThumbnail(file, {signal, generate = false, m
     timer = setTimeout(abort, TIMEOUT_MS);
   });
   try {
-    const native = metadata?.nativeCandidate || /\.360(?:\.mp4)?$/i.test(file.name || '');
+    const native = metadata?.nativeCandidate || /\.360$/i.test(file.name || '');
     const task = native ? nativeThumbnail(file, controller.signal) : browserThumbnail(file, controller.signal);
     const thumbnail = await Promise.race([task, stopped]);
     if (thumbnail) thumbnail.thumbnailSource = native ? 'Generated native keyframe near midpoint (unstitched)' : 'Generated midpoint frame';

@@ -19,8 +19,8 @@ test('prefetch is limited to advancing playback within the final 15 seconds',()=
 });
 test('exact ready successor is transferred once and never disposed by its former owner',async()=>{
  const value=payload(),file={},calls=[];const cache=createNextClipPreloader({prepare:async(f,o)=>{calls.push([f,o]);return value;}});
- cache.consider('next',file,{confirmed:true});cache.consider('next',file);await settle();
- assert.equal(calls.length,1);assert.equal(calls[0][1].confirmed,true);assert.equal(cache.take('next',file),value);cache.close();assert.equal(value.closed,0);assert.equal(cache.take('next',file),null);value.close();
+ cache.consider('next',file);cache.consider('next',file);await settle();
+ assert.equal(calls.length,1);assert.equal(cache.take('next',file),value);cache.close();assert.equal(value.closed,0);assert.equal(cache.take('next',file),null);value.close();
 });
 test('a wrong identity, cancellation, close and queue reorder discard staged resources',async()=>{
  for(const mode of ['file','key','cancel','close','reorder']){
@@ -54,20 +54,26 @@ test('native preparation reads and reuses compressed input without constructing 
   ready.close();assert.equal(ready.movie.getReadDiagnostics()[0].cachedBytes,0);
  }finally{Object.assign(globalThis,saved);}
 });
-test('browser preload is byte-identical, local and projection-gated, with bounded prefix and copy allowance',async()=>{
+test('browser flat preload is byte-identical and local, with bounded prefix and copy allowance',async()=>{
  const file=movie({native:false});
- const unconfirmed=await prepareNextClip(file,{signal:new AbortController().signal});assert.equal(unconfirmed.blob,undefined);assert.equal(unconfirmed.movie,undefined);
- const ready=await prepareNextClip(file,{signal:new AbortController().signal,confirmed:true});assert.deepEqual(await ready.blob.arrayBuffer(),await file.arrayBuffer());assert.equal(ready.blob.type,'video/mp4');ready.close();assert.equal(ready.blob,null);
+ const defaultFlat=await prepareNextClip(file,{signal:new AbortController().signal});assert.equal(defaultFlat.blob.size,file.size);assert.equal(defaultFlat.movie,undefined);defaultFlat.close();
+ const ready=await prepareNextClip(file,{signal:new AbortController().signal});assert.deepEqual(await ready.blob.arrayBuffer(),await file.arrayBuffer());assert.equal(ready.blob.type,'video/mp4');ready.close();assert.equal(ready.blob,null);
  assert.equal(BROWSER_PRELOAD_PREFIX_BYTES*2,NEXT_CLIP_PRELOAD_BYTES);assert.equal(NEXT_CLIP_PRELOAD_BYTES,64*1024*1024);
  // Keep valid tiny metadata at the front and lazily synthesize a long tail.
  const prefix=new Uint8Array(await file.arrayBuffer()),tail=box('mdat',Buffer.alloc(1));tail.writeUInt32BE(BROWSER_PRELOAD_PREFIX_BYTES+64);
  const total=prefix.length+BROWSER_PRELOAD_PREFIX_BYTES+64,reads=[];
  const large={name:'synthetic.mp4',size:total,type:'video/mp4',slice(start=0,end=total){reads.push([start,end]);const data=new Uint8Array(end-start);for(const [at,bytes] of [[0,prefix],[prefix.length,tail]]){const a=Math.max(at,start),b=Math.min(at+bytes.length,end);if(b>a)data.set(bytes.subarray(a-at,b-at),a-start);}return new Blob([data]);}};
- const warmed=await prepareNextClip(large,{confirmed:true});assert.equal(warmed.blob.size,total);assert.ok(reads.some(([a,b])=>a===0&&b===BROWSER_PRELOAD_PREFIX_BYTES));warmed.close();
+ const warmed=await prepareNextClip(large);assert.equal(warmed.blob.size,total);assert.ok(reads.some(([a,b])=>a===0&&b===BROWSER_PRELOAD_PREFIX_BYTES));warmed.close();
 });
 test('cancellation and malformed input cannot escape the preparation lifecycle',async()=>{
  const abort=new AbortController();abort.abort();await assert.rejects(prepareNextClip(movie(),{signal:abort.signal}),{name:'AbortError'});
  await assert.rejects(prepareNextClip(new File(['bad'],'bad.360'),{}),/Truncated/);
  const file=movie();let reads=0;const controller=new AbortController();const wrapper={size:file.size,name:file.name,slice(a,b){reads++;if(reads===4)controller.abort();return file.slice(a,b);}};
  await assert.rejects(prepareNextClip(wrapper,{signal:controller.signal}),{name:'AbortError'});
+});
+test('browser-supported non-MP4 files warm bounded original bytes with original MIME, without decoding',async()=>{
+ for(const type of ['video/webm','video/ogg','']){
+  const file=new File(['synthetic non-ISO bytes'],'clip.webm',{type}),ready=await prepareNextClip(file);
+  assert.equal(ready.info.browserFallback,true);assert.equal(ready.blob.type,type);assert.deepEqual(await ready.blob.arrayBuffer(),await file.arrayBuffer());ready.close();
+ }
 });

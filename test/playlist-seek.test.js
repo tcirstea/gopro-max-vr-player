@@ -59,7 +59,7 @@ function nativeFile() {
   const track = count => box('trak', box('mdia', box('hdlr', handler), box('mdhd', words(0, 0, 0, 1000, 9999)), box('minf', box('stbl',
     box('stsd', words(0, 1), box('hvc1', entry, box('hvcC', hvcc))), box('stsz', words(0, 1, count)), box('stts', words(0, 1, count, 40)),
     box('stsc', words(0, 1, 1, count, 1)), box('stco', words(0, 1, 64))))));
-  return new File([box('mdat', Buffer.alloc(1024 * 1024)), box('moov', box('mvhd', words(0, 0, 0, 1000, 99999)), track(5), track(3))], 'renamed.mp4');
+  return new File([box('mdat', Buffer.alloc(1024 * 1024)), box('moov', box('mvhd', words(0, 0, 0, 1000, 99999)), track(5), track(3))], 'synthetic.360');
 }
 test('native duration follows common sample-table playback endpoint, bounded metadata only', async t => {
   const original = nativeFile(), reads = [];
@@ -116,4 +116,9 @@ test('metadata reader refuses pre-abort and discards delayed native inspection',
   const file = {name: input.name, size: input.size, slice(a, b) { return {async arrayBuffer() { if (!release) await new Promise(r => { release = r; }); return input.slice(a, b).arrayBuffer(); }}; }};
   const pending = readPlaylistSeekDuration(file, {signal: late.signal}); late.abort(); release();
   await assert.rejects(pending, {name: 'AbortError'});
+});
+
+test('non-MP4 browser duration uses the same metadata-only cleanup path', async t => {
+ const h=browserHarness(t),pending=readPlaylistSeekDuration(new File(['synthetic WebM'],'clip.webm',{type:'video/webm'}));
+ await settle();assert.equal(h.video.preload,'metadata');h.video.dispatchEvent(new Event('loadedmetadata'));assert.equal(await pending,12.5);assert.deepEqual(h.stats(),{loads:2,revoked:1,plays:0});
 });

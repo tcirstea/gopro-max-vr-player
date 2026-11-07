@@ -14,24 +14,24 @@ const check=signal=>{if(signal?.aborted)throw new DOMException('Next clip prepar
 export function shouldPreloadNext({playing,buffering=false,preparing=false,currentTime,duration}){
  return playing&&!buffering&&!preparing&&Number.isFinite(currentTime)&&Number.isFinite(duration)&&duration>0&&currentTime>0&&duration-currentTime>0&&duration-currentTime<=NEXT_CLIP_LEAD_SECONDS;
 }
-export async function prepareNextClip(file,{signal,confirmed=false}={}){
+export async function prepareNextClip(file,{signal}={}){
  let movie=null;
  try{
-  check(signal);const info=await inspectFile(file);check(signal);
+  check(signal);const info=await inspectFile(file,{allowBrowser:true});check(signal);
   if(info.nativeCandidate){
    movie=await demuxNative(file);check(signal);
    await movie.prepare();check(signal);
    return {info,movie,close(){movie.close();}};
   }
-  // Projection remains an explicit per-File decision. Do not stage payload for
-  // unconfirmed browser clips, and never play a hidden video just to warm it.
-  if(!confirmed||!info.videoTracks.length)return {info,close(){}};
+  // Browser clips always use flat projection. Never play hidden video just
+  // to warm it, and retain the bounded compressed-byte allowance.
+  if(!info.browserFallback&&!info.videoTracks.length)return {info,close(){}};
   const end=Math.min(file.size,BROWSER_PRELOAD_PREFIX_BYTES);
   const bytes=await file.slice(0,end).arrayBuffer();check(signal);
   if(bytes.byteLength!==end)throw new Error('Truncated next-clip input.');
   // Blob parts preserve byte order and retain the rest as a local file slice;
   // only the bounded prefix is staged in memory, not the entire recording.
-  return {info,blob:new Blob([bytes,file.slice(end)],{type:file.type||'video/mp4'}),close(){this.blob=null;}};
+  return {info,blob:new Blob([bytes,file.slice(end)],{type:file.type||''}),close(){this.blob=null;}};
  }catch(error){movie?.close();throw error;}
 }
 
@@ -42,7 +42,7 @@ export function createNextClipPreloader({prepare=prepareNextClip}={}){
   if(disposed||running||!wanted||wanted.key===attempted)return;
   const request=wanted;attempted=request.key;
   const abort=new AbortController();running={request,abort};
-  Promise.resolve().then(()=>prepare(request.file,{signal:abort.signal,confirmed:request.confirmed})).then(value=>{
+  Promise.resolve().then(()=>prepare(request.file,{signal:abort.signal})).then(value=>{
    if(!value)return;
    if(disposed||abort.signal.aborted||wanted!==request)value.close();
    else ready={request,value};
@@ -50,11 +50,11 @@ export function createNextClipPreloader({prepare=prepareNextClip}={}){
  }
  function cancel(){wanted=null;attempted=null;running?.abort.abort();discard();}
  return {
-  consider(key,file,{confirmed=false}={}){
+  consider(key,file){
    if(disposed)return;
    if(!key||!file){cancel();return;}
    if(wanted?.key===key)return;
-   cancel();wanted={key,file,confirmed};start();
+   cancel();wanted={key,file};start();
   },
   // Never wait at EOF: use only a fully prepared exact successor. Incomplete,
   // failed or canceled work falls back to the ordinary open path immediately.

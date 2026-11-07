@@ -1,3 +1,4 @@
+import {installDesktopFullscreenControls} from './desktop-fullscreen-controls.js';
 import {resolvePlaylistSeek,readPlaylistSeekDuration} from './playlist-seek.js';
 import {createNextClipPreloader,prepareNextClip,shouldPreloadNext} from './next-clip-preload.js';
 import {installKeyboardControls} from './keyboard-controls.js';
@@ -8,6 +9,7 @@ import {createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS} from './playli
 import {createPlaylistBrowser} from './playlist-browser.js';
 import {readPlaylistMetadata,createPlaylistThumbnail} from './playlist-media.js';
 const $=id=>document.getElementById(id), video=$('video');
+const fullscreenControls=installDesktopFullscreenControls({document,window});
 // Store only explicit gallery choices, never filenames, media or audio state.
 // Missing/invalid saved values take the current default; explicit false survives.
 function readGalleryPreference(name,fallback){
@@ -52,14 +54,13 @@ function applySeek(target){
  if(nativePlayer){nativePlayer.seek(target);nativeTime=target;}else video.currentTime=target;
 }
 
-const confirmedProjection=new WeakSet();
 const nextClipPreload=createNextClipPreloader({prepare:prepareNextClip});
 let preloadResumeAfter=null,latestPlayback=null;
 function updateNextPreload(state=latestPlayback){
  latestPlayback=state;
  if(preloadResumeAfter!==null&&state?.playing&&!state.buffering&&!state.preparing&&state.currentTime>=preloadResumeAfter)preloadResumeAfter=null;
  const next=playlist[playlistIndex+1];
- if(!relativeSeek&&preloadResumeAfter===null&&!document.hidden&&!mediaOpening&&next&&state&&shouldPreloadNext(state))nextClipPreload.consider(next.id,next.file,{confirmed:confirmedProjection.has(next.file)});
+ if(!relativeSeek&&preloadResumeAfter===null&&!document.hidden&&!mediaOpening&&next&&state&&shouldPreloadNext(state))nextClipPreload.consider(next.id,next.file);
  else nextClipPreload.cancel();
 }
 function cancelPreloadForSeek(target){preloadResumeAfter=Number.isFinite(target)?target+.25:Infinity;nextClipPreload.cancel();}
@@ -100,7 +101,7 @@ function sortPlaylist(key,descending=playlistDescending){
 }
 function selectPlaylistItem(id){
  const index=playlist.findIndex(item=>item.id===id);if(index<0)return;
- playlistBrowser.close();renderer?.hideXRControls?.();$('viewer').classList?.add('controls-hidden');$('canvas').focus?.();
+ playlistBrowser.close();renderer?.hideXRControls?.();$('viewer').classList?.add('controls-hidden');$('canvas').focus?.();fullscreenControls.hide();
  return selectClip(index,true);
 }
 function syncPlaylist(){
@@ -141,9 +142,17 @@ async function resumeWhenReady(current){
 $('previous').addEventListener('click',()=>selectClip(playlistIndex-1));
 $('next').addEventListener('click',()=>selectClip(playlistIndex+1));
 $('playlist-select').addEventListener('change',event=>selectPlaylistItem(playlist[Number(event.target.value)]?.id));
-for(const type of ['pointerdown','keydown'])$('canvas').addEventListener(type,()=>$('viewer').classList?.remove('controls-hidden'));
+for(const type of ['pointerdown','keydown'])$('canvas').addEventListener(type,()=>{$('viewer').classList?.remove('controls-hidden');fullscreenControls.reveal();});
 syncPlaylist();
 const status=message=>$('status').textContent=message;
+let viewHelpFlat=null;
+function syncViewHelp(flat=false){
+ if(viewHelpFlat===flat)return;viewHelpFlat=flat;
+ $('view-mode').textContent=flat?'2D':'360°';$('viewer').setAttribute?.('aria-label',flat?'Flat video viewer':'360 degree viewer');
+ $('canvas').setAttribute?.('aria-label',flat?'Flat video. Space plays or pauses. Left and right arrows seek five seconds. Scroll or plus and minus zoom. Middle click resets zoom. Rotation is disabled.':'360 panorama. Drag to look around, right-drag to roll, scroll to zoom. Space plays or pauses. Left and right arrows seek.');
+ $('view-help').textContent=flat?'Flat video · Scroll to zoom · Middle-click resets zoom · Space plays/pauses · ←/→ seek':'Left-drag to pan · Right-drag horizontally to roll · Scroll to zoom · Middle-click resets zoom · Space plays/pauses · ←/→ seek';
+}
+
 function playbackStatus(message){const element=$('playback-state');if(element.textContent!==message)element.textContent=message;element.hidden=!message;}
 try{renderer=createRenderer($('canvas'));renderer.setSource(demoPanorama());renderer.onBeforeRender?.(time=>nativePlayer?.advance(time));renderer.onViewOrientation?.(rotation=>nativePlayer?.setViewRotation(rotation));}catch(error){status(error.message);}
 // Explicit, session-only opt-in: never restore sharing a headset view on reload.
@@ -187,26 +196,26 @@ $('canvas').addEventListener('xrpanelaction',event=>{
 });
 const hasHEVC=video.canPlayType('video/mp4; codecs="hvc1.1.6.L153.B0"');
 $('capabilities').textContent=`This browser: WebGL ${renderer?'available':'unavailable'} · WebCodecs ${'VideoDecoder' in window?'available':'unavailable'} · HEVC media hint: ${hasHEVC||'not reported'}. These hints do not validate native MAX playback.`;
-function clearMedia({preserveFrame=false}={}){nativeTime=0;nativeAdvancing=false;nativePlayer?.close();nativePlayer=null;$('diagnostics-panel').hidden=true;playbackStatus('');$('play').textContent=relativeSeek?.playing?'Pause':'Play';$('muted').disabled=false;syncAudioMode();syncAudioPreferences();video.pause();video.removeAttribute('src');video.load();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=null;pendingFile=null;pendingBlob=null;$('play').disabled=!relativeSeek;$('seek').disabled=true;$('seek').value=0;$('time').textContent='0:00 / 0:00';$('equirect').hidden=true;if(!preserveFrame){renderer?.setSource(demoPanorama());$('source').textContent='DEMO PANORAMA';$('view-title').textContent='Take a look around';}}
-async function openFile(file,{prepared=null,preserveFrame=false,initialTime=null,onReady=null,onConsent=null}={}){
+function clearMedia({preserveFrame=false}={}){nativeTime=0;nativeAdvancing=false;nativePlayer?.close();nativePlayer=null;$('diagnostics-panel').hidden=true;playbackStatus('');$('play').textContent=relativeSeek?.playing?'Pause':'Play';$('muted').disabled=false;syncAudioMode();syncAudioPreferences();video.pause();video.removeAttribute('src');video.load();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=null;pendingFile=null;pendingBlob=null;$('play').disabled=!relativeSeek;$('seek').disabled=true;$('seek').value=0;$('time').textContent='0:00 / 0:00';if(!preserveFrame){renderer?.setSource(demoPanorama());$('source').textContent='DEMO PANORAMA';$('view-title').textContent='Take a look around';syncViewHelp();}}
+async function openFile(file,{prepared=null,preserveFrame=false,initialTime=null,onReady=null,onBrowserPending=null}={}){
  completeMediaReady(false);mediaStartTime=initialTime;mediaReadyCallback=onReady;
  nextClipPreload.cancel();preloadResumeAfter=null;latestPlayback=null;stopPreview();mediaOpening=true;pendingPlayback=0;const current=++generation;let ended=false;clearMedia({preserveFrame});$('filename').textContent=file.name;$('metadata').textContent='';status('Inspecting local container metadata…');
- try{const info=prepared?.info||await inspectFile(file);if(current!==generation)return;
- $('metadata').textContent=`${(file.size/1024/1024).toFixed(1)} MiB · Container brand: ${info.brand||'unknown'}\n`+info.tracks.map((t,i)=>`Track ${i+1}: ${t.type} / ${t.codec}${t.width?` / ${t.width} × ${t.height}`:''}`).join('\n');
+ try{const info=prepared?.info||await inspectFile(file,{allowBrowser:true});if(current!==generation)return;
+ $('metadata').textContent=info.browserFallback?`${(file.size/1024/1024).toFixed(1)} MiB · Container and codecs checked by the browser.`:`${(file.size/1024/1024).toFixed(1)} MiB · Container brand: ${info.brand||'unknown'}\n`+info.tracks.map((t,i)=>`Track ${i+1}: ${t.type} / ${t.codec}${t.width?` / ${t.width} × ${t.height}`:''}`).join('\n');
  if(info.nativeCandidate){
   if(!renderer)throw new Error('WebGL is required for native playback.');
   status('Native dual-track candidate detected. Checking HEVC decoders and loading paired frames locally…');
   const preparedMovie=prepared?.movie;prepared=null;
   const player=await createNativePlayer(file,{autoTick:false,preparedMovie,initialTime:initialTime??0,
-   onFrames(a,b,options){if(current!==generation)return;renderer.setMaxSources(a,b,options);$('source').textContent='LOCAL MAX · EXPERIMENTAL EAC';$('view-title').textContent='Your point of view';},
+   onFrames(a,b,options){if(current!==generation)return;renderer.setMaxSources(a,b,options);$('source').textContent='LOCAL MAX · EXPERIMENTAL EAC';$('view-title').textContent='Your point of view';syncViewHelp();},
    onState(state){if(current!==generation)return;nativeTime=state.currentTime;nativeAdvancing=state.playing&&!state.buffering&&!state.preparing;playbackStatus(relativeSeek?'Seeking across the playlist…':state.preparing?(state.inputStrategy==='chunked-prefetch'?'Preparing 64 MiB playback buffers in local memory…':'Preparing this short clip in local memory…'):state.buffering?'Buffering paired video frames… Playback time is held until frames are ready.':state.playing?`Playing locally · ${state.audio?.available?(state.audio.mode==='ambisonic'?'Head-relative ambisonic headphones':state.audio.mode+' audio'):'Audio unavailable on this browser'}.`:'');$('play').textContent=(relativeSeek?relativeSeek.playing:state.playing)?'Pause':'Play';if(state.playing)stopPreview();else schedulePreviews();if(state.currentTime<state.duration)updateNextPreload(state);$('time').textContent=`${formatTime(state.currentTime)} / ${formatTime(state.duration)}`;$('seek').value=state.currentTime/state.duration*1000;if(state.audio){$('muted').disabled=!state.audio.available;syncAudioMode(state.audio);}if(state.currentTime<state.duration)ended=false;if(!relativeSeek&&!state.playing&&state.duration>0&&state.currentTime>=state.duration&&!ended){ended=true;advancePlaylist(current);}},
    onError(error){if(current===generation){completeMediaReady(false);playbackStatus('');$('play').disabled=true;$('seek').disabled=true;playWhenReady=false;latestPlayback=null;nextClipPreload.cancel();status(`Native decoder stopped: ${error.message}. Use Next to skip this clip.`);}}
   });
   if(current!==generation){player.close();return;}nativePlayer=player;seekDurations.set(file,player.duration);$('diagnostics-panel').hidden=false;$('play').disabled=false;$('seek').disabled=false;applyNativePreferences(player);$('muted').disabled=!player.audioState?.available;syncAudioMode(player.audioState);
   status('Experimental native MAX pipeline opened locally. Press Play. Dual HEVC frames are mapped as EAC; overlap blending is included; native audio is synchronized when supported. Your audio preferences are retained; headphone mode uses verified spatial metadata. Optical-flow seam correction is not implemented. Codec support does not guarantee real-time playback.'+(player.audioState?.available&&!player.audioState.modes.includes(preferences.audioMode)?` Preferred ${preferences.audioMode} audio is unavailable in this clip; using ${player.audioState.mode}. Your preference is kept for the next compatible clip.`:''));completeMediaReady(true);await resumeWhenReady(current);return;
  }
- if(!info.videoTracks.length){completeMediaReady(false);playWhenReady=false;status('No video track found in this container. Use Next to skip this clip.');return;}
- pendingFile=file;pendingBlob=prepared?.blob||null;if(confirmedProjection.has(file)){loadEquirectangular();return;}$('equirect').hidden=false;status('Container inspected. If this is an already-stitched equirectangular (2:1) video, choose “View as equirectangular video”. Ordinary flat videos will appear distorted. Browser codec support is checked when loading.');onConsent?.();
+ if(!info.browserFallback&&!info.videoTracks.length){completeMediaReady(false);playWhenReady=false;status('No video track found in this container. Use Next to skip this clip.');return;}
+ pendingFile=file;pendingBlob=prepared?.blob||null;loadBrowserVideo();onBrowserPending?.();
  }catch(error){if(current===generation){completeMediaReady(false);playWhenReady=false;status(`Cannot open this file: ${error.message}. Use Next to skip this clip.`);}}
  finally{prepared?.close();if(current===generation){mediaOpening=false;schedulePreviews();if(latestPlayback)updateNextPreload();}}
 }
@@ -221,23 +230,31 @@ $('download-diagnostics').addEventListener('click',()=>{
  }catch{status('Could not save the local diagnostics report. Playback has not been changed.');}
 });
 $('file').addEventListener('change',e=>{setPlaylist(e.target.files);e.target.value='';});
-function loadEquirectangular(){if(!pendingFile||!renderer)return;confirmedProjection.add(pendingFile);$('equirect').hidden=true;objectURL=URL.createObjectURL(pendingBlob||pendingFile);pendingBlob=null;video.src=objectURL;video.load();status('Loading local video with the browser decoder…');}
-$('equirect').addEventListener('click',loadEquirectangular);
+function syncBrowserVideo(){
+ if(video.readyState>=2)renderer?.setSource(video,{projection:'flat'});
+ $('source').textContent='LOCAL FLAT VIDEO';$('view-title').textContent='Your video';syncViewHelp(true);
+}
+function loadBrowserVideo(){
+ if(!pendingFile)return;
+ if(!renderer)throw new Error('WebGL is required for video playback in this viewer.');
+ syncBrowserVideo();objectURL=URL.createObjectURL(pendingBlob||pendingFile);pendingBlob=null;
+ video.src=objectURL;video.load();status('Loading local video with the browser decoder…');
+}
 function applyMediaStart(){if(mediaStartTime!==null&&Number.isFinite(video.duration)){video.currentTime=Math.max(0,Math.min(video.duration,mediaStartTime));mediaStartTime=null;}}
 video.addEventListener('loadedmetadata',()=>{if(objectURL){try{applyMediaStart();}catch(error){completeMediaReady(false);status(`Seeking failed: ${error.message}`);}}});
-video.addEventListener('loadeddata',()=>{if(!objectURL||video.readyState<2||(video.currentSrc&&video.currentSrc!==objectURL))return;try{applyMediaStart();}catch(error){completeMediaReady(false);status(`Seeking failed: ${error.message}`);return;}if(pendingFile&&Number.isFinite(video.duration))seekDurations.set(pendingFile,video.duration);renderer?.setSource(video);$('source').textContent='LOCAL EQUIRECTANGULAR VIDEO';$('view-title').textContent='Your point of view';$('play').disabled=false;$('seek').disabled=false;status(`Video decoded locally: ${video.videoWidth} × ${video.videoHeight}. Press Play to explore.${Math.abs(video.videoWidth/video.videoHeight-2)>.05?' Warning: this is not a 2:1 frame; verify its projection.':''}`);completeMediaReady(true);resumeWhenReady(generation);});
-video.addEventListener('error',()=>{if(objectURL&&video.error){completeMediaReady(false);playWhenReady=false;latestPlayback=null;nextClipPreload.cancel();$('play').disabled=true;$('seek').disabled=true;status('This browser could not decode this video. HEVC support depends on your browser, OS, and hardware. Use Next to skip this clip. No transcoding or upload was attempted.');}});
+video.addEventListener('loadeddata',()=>{if(!objectURL||video.readyState<2||(video.currentSrc&&video.currentSrc!==objectURL))return;if(video.videoWidth===0||video.videoHeight===0){completeMediaReady(false);playWhenReady=false;status('No playable video picture found in this file. Use Next to skip this clip.');return;}try{applyMediaStart();}catch(error){completeMediaReady(false);status(`Seeking failed: ${error.message}`);return;}if(pendingFile&&Number.isFinite(video.duration))seekDurations.set(pendingFile,video.duration);syncBrowserVideo();$('play').disabled=false;$('seek').disabled=false;status(`Video decoded locally: ${video.videoWidth} × ${video.videoHeight}. Flat 2D playback. Browser-video 360 projections are not supported.`);completeMediaReady(true);resumeWhenReady(generation);});
+video.addEventListener('error',()=>{if(objectURL&&video.error){completeMediaReady(false);playWhenReady=false;latestPlayback=null;nextClipPreload.cancel();$('play').disabled=true;$('seek').disabled=true;status('This browser could not decode this video. Container and codec support depend on your browser, OS, and hardware (including HEVC). Use Next to skip this clip. No transcoding or upload was attempted.');}});
 async function togglePlayback(){if(relativeSeek){relativeSeek.playing=!relativeSeek.playing;$('play').textContent=relativeSeek.playing?'Pause':'Play';return;}if($('play').disabled)return;const current=generation;pendingPlayback++;stopPreview();try{if(nativePlayer){if(nativePlayer.playing)nativePlayer.pause();else await nativePlayer.play();}else if(video.paused)await video.play();else video.pause();}catch(error){if(current===generation)status(`Playback blocked: ${error.message}`);}finally{if(current===generation){pendingPlayback--;schedulePreviews();}}}
 $('play').addEventListener('click',togglePlayback);
 $('canvas').addEventListener('xrtoggleplay',togglePlayback);
 $('canvas').addEventListener('xrseek',event=>seekRelative(event.detail));
 installKeyboardControls({target:window,document,togglePlayback,seek:seekRelative,
  canPlay:()=>!!relativeSeek||!$('play').disabled,canSeek:canSeekRelative,
- revealControls:()=>$('viewer').classList?.remove('controls-hidden')
+ revealControls:()=>{$('viewer').classList?.remove('controls-hidden');fullscreenControls.reveal();}
 });
 function seekRelative(seconds){
  if(!canSeekRelative()||!Number.isFinite(seconds)||seconds===0)return;
- if(relativeSeek){relativeSeek.delta+=seconds;relativeSeek.revision++;if(pendingFile&&!objectURL&&!$('equirect').hidden)relativeSeek.wake?.();return relativeSeek.promise;}
+ if(relativeSeek){relativeSeek.delta+=seconds;relativeSeek.revision++;if(pendingFile&&$('seek').disabled)relativeSeek.wake?.();return relativeSeek.promise;}
  try{
   const duration=nativePlayer?nativePlayer.duration:video.duration,time=currentPlaybackTime();
   if(!Number.isFinite(duration)||duration<0||!Number.isFinite(time))return;
@@ -261,10 +278,9 @@ async function runRelativeSeek(job){
  const openTarget=(index,time)=>new Promise(resolve=>{
   let finished=false;const revision=job.revision;
   const done=value=>{if(finished)return;finished=true;job.wake=null;resolve(value);};
-  // Projection consent is user-paced, not decoder work. A reversal must be
-  // able to leave that unconfirmed destination without approving its format.
+  // New seek input may abandon a browser clip while its decoder is loading.
   job.wake=()=>{mediaReadyCallback=null;done('replan');};
-  selectClip(index,false,false,{initialTime:time,onReady:done,onConsent:()=>{if(active()&&revision!==job.revision)job.wake?.();}});
+  selectClip(index,false,false,{initialTime:time,onReady:done,onBrowserPending:()=>{if(active()&&revision!==job.revision)job.wake?.();}});
  });
  try{
   while(active()){

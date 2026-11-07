@@ -1,3 +1,4 @@
+import {createFlatView,flatSize,FLAT_GLSL} from './flat-view.js';
 import {createXRPanel} from './xr-panel.js';
 import {createZoomDetents} from './zoom.js';
 import {createXRViewDrag} from './xr-view-drag.js';
@@ -10,7 +11,8 @@ export function createRenderer(canvas) {
   const vertex='attribute vec2 p; varying vec2 uv; void main(){uv=p;gl_Position=vec4(p,0.,1.);}';
   const fragment=`precision highp float; varying vec2 uv; uniform sampler2D panorama; uniform float aspect,yaw,pitch,roll,fov,mode,xr;uniform mat4 invProjection,viewRotation;uniform mat3 stabilization,xrCenter;
   ${MAX_GLSL}
-  void main(){vec3 d;
+  ${FLAT_GLSL}
+  void main(){if(mode>1.5){gl_FragColor=sampleFlat();return;}vec3 d;
   if(xr>.5){vec3 eyeRay=(invProjection*vec4(uv,-1.,1.)).xyz;eyeRay.xy*=tan(fov/2.);d=normalize(xrCenter*mat3(viewRotation)*eyeRay);}
   else {d=normalize(vec3(uv.x*aspect*tan(fov/2.),uv.y*tan(fov/2.),-1.));d=vec3(d.x*cos(roll)-d.y*sin(roll),d.x*sin(roll)+d.y*cos(roll),d.z);d=vec3(d.x,d.y*cos(pitch)-d.z*sin(pitch),d.y*sin(pitch)+d.z*cos(pitch));}
   d=vec3(d.x*cos(yaw)+d.z*sin(yaw),d.y,-d.x*sin(yaw)+d.z*cos(yaw));
@@ -25,7 +27,7 @@ export function createRenderer(canvas) {
   const uniforms={};const loc=n=>uniforms[n]??(uniforms[n]=gl.getUniformLocation(program,n));
   const textures=[0,1].map(i=>{const t=gl.createTexture();gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,t);for(const pname of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,pname,gl.LINEAR);for(const pname of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,pname,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0,255]));return t;});
   gl.uniform1i(loc('panorama'),0);gl.uniform1i(loc('trackOne'),1);
-  let source=null,dirty=true,yaw=0,pitch=0,roll=0,fov=Math.PI/2,lastPointer=null,mode=0,session=null,referenceSpace=null;
+  let source=null,sourceAspect=16/9,dirty=true,yaw=0,pitch=0,roll=0,fov=Math.PI/2,lastPointer=null,mode=0,session=null,referenceSpace=null;
   let stabilization=quaternionMatrix(IDENTITY_QUATERNION),orientationCallback=null,frameCallback=null,lastView=quaternionMatrix(IDENTITY_QUATERNION);
   let xrTransition=null;
   let xrCenter=quaternionMatrix(IDENTITY_QUATERNION),pendingRecenter=false;
@@ -42,12 +44,23 @@ export function createRenderer(canvas) {
     }catch(error){panelError(error);}
   }
   const zoomDetents=createZoomDetents();let lastWheelTime=null;
+  const flatView=createFlatView();
+  function zoom(delta,time){if(mode===2)flatView.zoom(delta);else fov=zoomDetents.apply(fov,delta,time);}
+  function resetZoom(){if(mode===2)flatView.reset();else fov=Math.PI/2;zoomDetents.reset();lastWheelTime=null;}
   const viewDrag=createXRViewDrag();let dragSource=null;
-  const xrControls=createXRControls({togglePanel,showPanel:input=>togglePanel(input,true),zoom:(delta,time)=>{fov=zoomDetents.apply(fov,delta,time);},zoomEnd:()=>zoomDetents.release(),seek:seconds=>canvas.dispatchEvent(new CustomEvent('xrseek',{detail:seconds})),togglePlayback:()=>canvas.dispatchEvent(new Event('xrtoggleplay')),resetZoom:()=>{fov=Math.PI/2;zoomDetents.reset();},dragView:(active,input)=>{dragSource=active?input:null;viewDrag.setActive(active);}});
-  function reportView(pose=null){const view=pose?multiplyMatrix3(viewRotationMatrix(yaw,0),multiplyMatrix3(xrCenter,viewRotationMatrix(0,0,pose))):multiplyMatrix3(viewRotationMatrix(yaw,pitch),quaternionMatrix([Math.cos(roll/2),0,0,Math.sin(roll/2)]));lastView=multiplyMatrix3(stabilization,view);orientationCallback?.(lastView.slice());}
+  const xrControls=createXRControls({togglePanel,showPanel:input=>togglePanel(input,true),zoom,zoomEnd:()=>zoomDetents.release(),seek:seconds=>canvas.dispatchEvent(new CustomEvent('xrseek',{detail:seconds})),togglePlayback:()=>canvas.dispatchEvent(new Event('xrtoggleplay')),resetZoom,dragView:(active,input)=>{dragSource=mode!==2&&active?input:null;viewDrag.setActive(mode!==2&&active);}});
+  function reportView(pose=null){if(mode===2){lastView=quaternionMatrix(IDENTITY_QUATERNION);orientationCallback?.(lastView.slice());return;}const view=pose?multiplyMatrix3(viewRotationMatrix(yaw,0),multiplyMatrix3(xrCenter,viewRotationMatrix(0,0,pose))):multiplyMatrix3(viewRotationMatrix(yaw,pitch),quaternionMatrix([Math.cos(roll/2),0,0,Math.sin(roll/2)]));lastView=multiplyMatrix3(stabilization,view);orientationCallback?.(lastView.slice());}
   function upload(s,i){gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,textures[i]);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,s);}
   function uploadSource(){if(source&&(dirty||(source.tagName==='VIDEO'&&!source.paused))&&(source.tagName!=='VIDEO'||source.readyState>=2)){try{upload(source,0);}catch(error){source=null;canvas.dispatchEvent(new CustomEvent('rendererror',{detail:error.message}));}}dirty=false;}
-  function render(w,h,xr=false){for(const [n,v]of Object.entries({aspect:w/Math.max(1,h),yaw,pitch,roll,fov,mode,xr:xr?1:0}))gl.uniform1f(loc(n),v);gl.uniformMatrix3fv(loc('stabilization'),false,stabilization);gl.uniformMatrix3fv(loc('xrCenter'),false,xrCenter);gl.drawArrays(gl.TRIANGLES,0,6);}
+  function render(w,h,xr=false){for(const [n,v]of Object.entries({aspect:w/Math.max(1,h),yaw,pitch,roll,fov,mode,xr:xr?1:0}))gl.uniform1f(loc(n),v);gl.uniformMatrix3fv(loc('stabilization'),false,stabilization);gl.uniformMatrix3fv(loc('xrCenter'),false,xrCenter);
+    if(mode===2){
+      const width=source?.videoWidth||source?.width,height=source?.videoHeight||source?.height;
+      if(width>0&&height>0)sourceAspect=width/height;
+      const ratio=sourceAspect,size=flatSize(ratio),placement=flatView.placement;
+      gl.uniform1f(loc('videoAspect'),ratio);gl.uniform1f(loc('flatDistance'),flatView.distance);
+      gl.uniform2fv(loc('flatSize'),size);gl.uniform3fv(loc('flatCenter'),placement.center);gl.uniformMatrix3fv(loc('flatRotation'),false,placement.rotation);
+    }
+    gl.drawArrays(gl.TRIANGLES,0,6);}
   function resizeDesktop(maxDimension=Infinity){
     const scale=Math.min(globalThis.devicePixelRatio||1,2),width=Math.max(1,Math.round(canvas.clientWidth*scale)),height=Math.max(1,Math.round(canvas.clientHeight*scale));
     const reduction=Math.min(1,maxDimension/Math.max(width,height)),w=Math.max(1,Math.round(width*reduction)),h=Math.max(1,Math.round(height*reduction));
@@ -108,10 +121,11 @@ export function createRenderer(canvas) {
     session.requestAnimationFrame(xrDraw);if(gl.isContextLost())return;
     xrControls.update(session,time);const pose=frame.getViewerPose(referenceSpace);
     if(!pose){viewDrag.rebase();xrPanel?.reset();clearMirror();return;}
+    if(mode===2){flatView.update(pose.transform.matrix);pendingRecenter=false;}
     if(pendingRecenter){xrCenter=inverseViewRotation(pose.transform.matrix);yaw=0;pitch=0;roll=0;fov=Math.PI/2;pendingRecenter=false;viewDrag.rebase();}
     const dragSpace=dragSource?.gripSpace||dragSource?.targetRaySpace;
     const controllerPose=dragSpace?frame.getPose?.(dragSpace,referenceSpace):null;
-    xrCenter=viewDrag.update(xrCenter,pose.transform.matrix,controllerPose?.transform.matrix);
+    if(mode!==2)xrCenter=viewDrag.update(xrCenter,pose.transform.matrix,controllerPose?.transform.matrix);
     frameCallback?.(time);
     try{xrPanel?.update(session,time,frame,referenceSpace,pose.transform.matrix);}catch(error){xrPanel?.reset();panelError(error);}
     uploadSource();reportView(pose.transform.matrix);
@@ -138,13 +152,14 @@ export function createRenderer(canvas) {
   }
   canvas.addEventListener('pointerdown',e=>{
     if(lastPointer)return;
-    if(e.button===1){e.preventDefault?.();canvas.focus();fov=Math.PI/2;zoomDetents.reset();lastWheelTime=null;return;}
+    if(e.button===1){e.preventDefault?.();canvas.focus();resetZoom();return;}
+    if(mode===2){canvas.focus?.();return;}
     if(e.button!==undefined&&e.button!==0&&e.button!==2)return;
     e.preventDefault?.();canvas.focus();canvas.setPointerCapture(e.pointerId);
     lastPointer={id:e.pointerId,x:e.clientX,y:e.clientY,button:e.button??0};
   });
   canvas.addEventListener('pointermove',e=>{
-    if(!lastPointer||e.pointerId!==lastPointer.id)return;
+    if(mode===2||!lastPointer||e.pointerId!==lastPointer.id)return;
     if(e.buttons!==undefined&&!(e.buttons&(lastPointer.button===2?2:1))){endPointer();return;}
     if(lastPointer.button===2){
       // Camera-local Z: rightward dragging turns the image clockwise without
@@ -162,14 +177,19 @@ export function createRenderer(canvas) {
   document.addEventListener?.('visibilitychange',()=>{if(document.hidden){endPointer();clearMirror();}});
   canvas.addEventListener('contextmenu',e=>e.preventDefault());
   canvas.addEventListener('auxclick',e=>{if(e.button===1)e.preventDefault();});
-  canvas.addEventListener('wheel',e=>{e.preventDefault();const time=e.timeStamp??performance.now();if(lastWheelTime===null||time-lastWheelTime>=150)zoomDetents.release();lastWheelTime=time;fov=zoomDetents.apply(fov,e.deltaY,time);},{passive:false});
-  canvas.addEventListener('keydown',e=>{if(e.defaultPrevented||e.isComposing||e.altKey||e.ctrlKey||e.metaKey||!['ArrowUp','ArrowDown','+','=','-'].includes(e.key))return;e.preventDefault();pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.key==='ArrowUp'?.1:e.key==='ArrowDown'?-.1:0)));const delta=e.key==='-'?100:['+','='].includes(e.key)?-100:0;if(delta)fov=zoomDetents.apply(fov,delta,e.timeStamp??performance.now());});
+  canvas.addEventListener('wheel',e=>{e.preventDefault();const time=e.timeStamp??performance.now();if(lastWheelTime===null||time-lastWheelTime>=150)zoomDetents.release();lastWheelTime=time;zoom(e.deltaY,time);},{passive:false});
+  canvas.addEventListener('keydown',e=>{if(e.defaultPrevented||e.isComposing||e.altKey||e.ctrlKey||e.metaKey||!['ArrowUp','ArrowDown','+','=','-'].includes(e.key))return;e.preventDefault();if(mode!==2)pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.key==='ArrowUp'?.1:e.key==='ArrowDown'?-.1:0)));const delta=e.key==='-'?100:['+','='].includes(e.key)?-100:0;if(delta)zoom(delta,e.timeStamp??performance.now());});
   canvas.addEventListener('keyup',e=>{if(['+','=','-'].includes(e.key))zoomDetents.release();});
   canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();mirrorPainted=false;canvas.dispatchEvent(new CustomEvent('rendererror',{detail:'Graphics context lost. Reload the player to restore playback.'}));});
   requestAnimationFrame(draw);
-  const api={setSource(next){source=next;mode=0;dirty=true;stabilization=quaternionMatrix(IDENTITY_QUATERNION);},
+  function setMode(next){
+    if(mode===next)return;
+    endPointer();dragSource=null;viewDrag.reset();zoomDetents.reset();lastWheelTime=null;
+    if(next===2)flatView.recenter();mode=next;
+  }
+  const api={setSource(next,{projection='equirectangular'}={}){source=next;setMode(projection==='flat'?2:0);dirty=true;stabilization=quaternionMatrix(IDENTITY_QUATERNION);},
     // Synchronous GPU upload. Caller retains ownership and may close frames immediately.
-    setMaxSources(first,second,options={}){const width=options.width??first.displayWidth??first.videoWidth??first.width;const height=options.height??first.displayHeight??first.videoHeight??first.height;const l=maxLayout(width,height);const secondWidth=second.displayWidth??second.videoWidth??second.width;const secondHeight=second.displayHeight??second.videoHeight??second.height;if(!options.width&&(secondWidth!==width||secondHeight!==height))throw new Error('MAX track frames must have matching dimensions.');if(width>gl.getParameter(gl.MAX_TEXTURE_SIZE))throw new Error('This GPU cannot hold the MAX video textures.');if(gl.isContextLost())throw new Error('Graphics context is lost.');upload(first,0);upload(second,1);gl.uniform4f(loc('maxSize'),l.width,l.height,l.side,l.center);gl.uniform1f(loc('maxBlend'),l.blend);stabilization=quaternionMatrix(options.stabilization||IDENTITY_QUATERNION);source=null;mode=1;dirty=false;},
+    setMaxSources(first,second,options={}){const width=options.width??first.displayWidth??first.videoWidth??first.width;const height=options.height??first.displayHeight??first.videoHeight??first.height;const l=maxLayout(width,height);const secondWidth=second.displayWidth??second.videoWidth??second.width;const secondHeight=second.displayHeight??second.videoHeight??second.height;if(!options.width&&(secondWidth!==width||secondHeight!==height))throw new Error('MAX track frames must have matching dimensions.');if(width>gl.getParameter(gl.MAX_TEXTURE_SIZE))throw new Error('This GPU cannot hold the MAX video textures.');if(gl.isContextLost())throw new Error('Graphics context is lost.');upload(first,0);upload(second,1);gl.uniform4f(loc('maxSize'),l.width,l.height,l.side,l.center);gl.uniform1f(loc('maxBlend'),l.blend);stabilization=quaternionMatrix(options.stabilization||IDENTITY_QUATERNION);source=null;setMode(1);dirty=false;},
     // A single active render loop drives native media even when immersive XR
     // suppresses window animation frames; advance before texture/view upload.
     hideXRControls(){xrPanel?.reset();},
@@ -186,7 +206,7 @@ export function createRenderer(canvas) {
     // gyro correction so an ambisonic listener follows the displayed view.
     onViewOrientation(callback){orientationCallback=callback;return ()=>{if(orientationCallback===callback)orientationCallback=null;};},
     getViewOrientation(){return lastView.slice();},
-    refresh(){dirty=true;},reset(){endPointer();yaw=0;pitch=0;roll=0;fov=Math.PI/2;zoomDetents.reset();pendingRecenter=!!session;},
+    refresh(){dirty=true;},reset(){endPointer();if(mode===2){flatView.reset();return;}yaw=0;pitch=0;roll=0;fov=Math.PI/2;zoomDetents.reset();pendingRecenter=!!session;},
     async enterVR(){
       // requestSession must start in the user gesture, but only once while entry,
       // setup or exit is pending. A rapid second click joins the same operation.
@@ -206,9 +226,10 @@ export function createRenderer(canvas) {
           await gl.makeXRCompatible();
           if(ended)return;
           const ref=await next.requestReferenceSpace('local');
+          ref.addEventListener?.('reset',()=>{if(referenceSpace===ref)flatView.recenter();});
           if(ended)return;
           next.updateRenderState({baseLayer:new XRWebGLLayer(next,gl)});
-          referenceSpace=ref;session=next;xrCenter=quaternionMatrix(IDENTITY_QUATERNION);pendingRecenter=false;xrControls.reset();viewDrag.reset();xrPanel?.reset();dragSource=null;
+          referenceSpace=ref;session=next;flatView.recenter();xrCenter=quaternionMatrix(IDENTITY_QUATERNION);pendingRecenter=false;xrControls.reset();viewDrag.reset();xrPanel?.reset();dragSource=null;
           if(desktopMirror)mirrorChanged();
           next.addEventListener('visibilitychange',()=>{if(session===next){xrControls.reset();viewDrag.reset();xrPanel?.reset();dragSource=null;pendingRecenter=false;if(next.visibilityState!=='visible')clearMirror();}});
           next.requestAnimationFrame(xrDraw);

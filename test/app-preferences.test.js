@@ -1,3 +1,4 @@
+import {installDesktopFullscreenControls} from '../src/desktop-fullscreen-controls.js';
 import {resolvePlaylistSeek,readPlaylistSeekDuration} from '../src/playlist-seek.js';
 import {createNextClipPreloader,shouldPreloadNext} from '../src/next-clip-preload.js';
 import {installKeyboardControls} from '../src/keyboard-controls.js';
@@ -9,7 +10,7 @@ import vm from 'node:vm';
 function harness({graphicsAvailable=true}={}){
  const elements=new Map(),players=[],pending=new Map();let resets=0,panelProvider;const mirrorChoices=[],mirrorQualityChoices=[];
  const element=id=>{if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,disabled:false,value:0,checked:true,handlers:{},addEventListener(n,f){this.handlers[n]=f;},canPlayType:()=>'',pause(){},load(){},removeAttribute(){},replaceChildren(){}});return elements.get(id);};
- const context=vm.createContext({resolvePlaylistSeek,readPlaylistSeekDuration,createNextClipPreloader,shouldPreloadNext,prepareNextClip:async()=>null,installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:element},window:{addEventListener(){}},URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},createRenderer:()=>{if(!graphicsAvailable)throw Error('WebGL unavailable');return {setDesktopMirror(value){mirrorChoices.push(value);},setDesktopMirrorQuality(value){mirrorQualityChoices.push(value);},setSource(){},setMaxSources(){},onXRPanelState(fn){panelProvider=fn;},reset(){resets++;}};},demoPanorama:()=>({}),formatTime:String,inspectFile:async f=>({nativeCandidate:!f.flat,tracks:[],videoTracks:[{}]}),createNativePlayer:async(f,callbacks)=>{
+ const context=vm.createContext({installDesktopFullscreenControls,resolvePlaylistSeek,readPlaylistSeekDuration,createNextClipPreloader,shouldPreloadNext,prepareNextClip:async()=>null,installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:element},window:{addEventListener(){}},URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},createRenderer:()=>{if(!graphicsAvailable)throw Error('WebGL unavailable');return {setDesktopMirror(value){mirrorChoices.push(value);},setDesktopMirrorQuality(value){mirrorQualityChoices.push(value);},setSource(){},setMaxSources(){},onXRPanelState(fn){panelProvider=fn;},reset(){resets++;}};},demoPanorama:()=>({}),formatTime:String,inspectFile:async f=>({nativeCandidate:!f.flat,tracks:[],videoTracks:[{}]}),createNativePlayer:async(f,callbacks)=>{
  const player={name:f.name,callbacks,closed:false,duration:10,audioState:{available:!f.silent,modes:f.silent?[]:f.stereo?['stereo']:['stereo','ambisonic'],mode:'stereo'},setMuted(v){this.muted=v;},setVolume(v){this.volume=v;},setAudioMode(v){this.audioState.mode=v;},close(){this.closed=true;}};players.push(player);
  if(f.pending)await new Promise(resolve=>pending.set(f.name,resolve));return player;
  }});
@@ -21,7 +22,7 @@ function harness({graphicsAvailable=true}={}){
 test('audio preferences survive native, flat and demo switches and explicit view reset is separate',async()=>{
  const h=harness();await h.open('one');h.change('muted',false);h.change('volume',.35,'input');h.change('audio-mode','ambisonic');
  await h.open('two');assert.equal(h.players[0].closed,true);assert.equal(h.players[1].muted,false);assert.equal(h.players[1].volume,.35);assert.equal(h.players[1].audioState.mode,'ambisonic');
- await h.open('flat',{flat:true});h.element('equirect').handlers.click();h.element('video').handlers.loadeddata();assert.equal(h.element('video').muted,false);assert.equal(h.element('video').volume,.35);
+ await h.open('flat',{flat:true});h.element('video').handlers.loadeddata();assert.equal(h.element('video').muted,false);assert.equal(h.element('video').volume,.35);
  h.change('volume',.6,'input');h.element('demo').handlers.click();assert.equal(h.resets,0);assert.equal(h.element('volume').value,.6);
  await h.open('three');assert.equal(h.players.at(-1).volume,.6);assert.equal(h.players.at(-1).audioState.mode,'ambisonic');assert.equal(h.players.at(-1).muted,false);
  h.element('reset').handlers.click();assert.equal(h.resets,1);
@@ -52,7 +53,7 @@ test('VR mute shares browser preference across native, flat, silent, and pending
  h.mute();assert.equal(h.panelState.muted,false);assert.equal(h.element('muted').checked,false);assert.equal(h.players.at(-1).muted,false);assert.equal(h.element('video').muted,false);
  h.change('muted',true);assert.equal(h.panelState.muted,true);h.mute();
  await h.open('two');assert.equal(h.players.at(-1).muted,false);assert.equal(h.players.at(-1).volume,.35);assert.equal(h.players.at(-1).audioState.mode,'ambisonic');
- await h.open('flat',{flat:true});h.element('equirect').handlers.click();h.element('video').handlers.loadeddata();h.mute();assert.equal(h.element('video').muted,true);assert.equal(h.element('muted').checked,true);
+ await h.open('flat',{flat:true});h.element('video').handlers.loadeddata();h.mute();assert.equal(h.element('video').muted,true);assert.equal(h.element('muted').checked,true);
  await h.open('silent',{silent:true});assert.equal(h.panelState.canMute,false);h.mute();assert.equal(h.panelState.muted,true);
  const pending=h.open('pending',{pending:true});await new Promise(resolve=>setImmediate(resolve));h.mute();h.pending.get('pending')();await pending;
  assert.equal(h.players.at(-1).muted,false);assert.equal(h.panelState.muted,false);assert.equal(h.players.at(-1).audioState.mode,'ambisonic');assert.equal(h.players.at(-1).volume,.35);
@@ -110,4 +111,15 @@ test('mirror quality UI labels choices and explains pixel targets, GPU cost, ful
  assert.match(html,/<select id="desktop-mirror-quality" aria-describedby="desktop-mirror-quality-note" autocomplete="off"><option value="performance">Performance<\/option><option value="headset">Match headset<\/option>/);
  assert.match(html,/Performance caps the mirror canvas at 1280 pixels/);assert.match(html,/actual resolution of one headset eye, including room for black bars, subject to GPU limits/);
  assert.match(html,/Useful for fullscreen; adds GPU load/);assert.match(html,/without a headset session, desktop viewing is unchanged/);assert.match(html,/Resets to Performance on reload/);
+});
+
+test('flat load without WebGL fails and completes pending readiness instead of hanging',async()=>{
+ const h=harness({graphicsAvailable:false});let ready;
+ await h.context.openFile({name:'flat.webm',size:100,flat:true},{onReady:value=>ready=value});
+ assert.equal(ready,false);assert.match(h.element('status').textContent,/WebGL is required for video playback/);assert.equal(h.element('play').disabled,true);
+});
+test('flat visible help and mode label restore on demo and native frame transitions',async()=>{
+ const h=harness();await h.open('flat.mp4',{flat:true});assert.equal(h.element('view-mode').textContent,'2D');assert.match(h.element('view-help').textContent,/Flat video/);
+ h.element('demo').handlers.click();assert.equal(h.element('view-mode').textContent,'360°');assert.match(h.element('view-help').textContent,/Left-drag to pan/);
+ await h.open('flat.mp4',{flat:true});await h.open('native.360');h.players.at(-1).callbacks.onFrames({},{});assert.equal(h.element('view-mode').textContent,'360°');assert.match(h.element('view-help').textContent,/Right-drag/);
 });

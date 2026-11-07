@@ -1,3 +1,4 @@
+import {installDesktopFullscreenControls} from '../src/desktop-fullscreen-controls.js';
 import {resolvePlaylistSeek,readPlaylistSeekDuration} from '../src/playlist-seek.js';
 import {createNextClipPreloader,shouldPreloadNext} from '../src/next-clip-preload.js';
 import {installKeyboardControls} from '../src/keyboard-controls.js';
@@ -10,7 +11,7 @@ function harness(native=true){
  const elements=new Map(),seeks=[],keys={};let callbacks,panelProvider,played=0,paused=0;
  function element(id){if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,disabled:['play','seek'].includes(id),value:0,checked:true,paused:true,currentTime:0,duration:20,handlers:{},addEventListener(name,fn){this.handlers[name]=fn;},canPlayType(){return '';},async play(){this.paused=false;played++;},pause(){this.paused=true;paused++;},load(){},removeAttribute(){},replaceChildren(){}});return elements.get(id);}
  const player={setMuted(){},setVolume(){},playing:false,duration:20,close(){},seek(t){seeks.push(t);},async play(){this.playing=true;played++;},pause(){this.playing=false;paused++;}};
- const context=vm.createContext({resolvePlaylistSeek,readPlaylistSeekDuration,createNextClipPreloader,shouldPreloadNext,prepareNextClip:async()=>null,installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:element},window:{addEventListener(n,f){keys[n]=f;}},URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},createRenderer:()=>({setSource(){},reset(){},onXRPanelState(fn){panelProvider=fn;}}),demoPanorama:()=>({}),formatTime:n=>`${n}`,inspectFile:async()=>({nativeCandidate:native,brand:'test',tracks:[],videoTracks:[{}]}),createNativePlayer:async(file,options)=>{callbacks=options;return player;}});
+ const context=vm.createContext({installDesktopFullscreenControls,resolvePlaylistSeek,readPlaylistSeekDuration,createNextClipPreloader,shouldPreloadNext,prepareNextClip:async()=>null,installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:element},window:{addEventListener(n,f){keys[n]=f;}},URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},createRenderer:()=>({setSource(){},reset(){},onXRPanelState(fn){panelProvider=fn;}}),demoPanorama:()=>({}),formatTime:n=>`${n}`,inspectFile:async()=>({nativeCandidate:native,brand:'test',tracks:[],videoTracks:[{}]}),createNativePlayer:async(file,options)=>{callbacks=options;return player;}});
  const source=readFileSync(new URL('../src/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');vm.runInContext(source,context);
  return {element,context,player,seeks,key(key){const event={key,preventDefault(){}};keys.keydown(event);keys.keyup(event);},get panelState(){return panelProvider();},panelAction:(action,value)=>element('canvas').handlers.xrpanelaction({detail:{action,value}}),get callbacks(){return callbacks;},get played(){return played;},get paused(){return paused;},seek:delta=>element('canvas').handlers.xrseek({detail:delta}),toggle:()=>element('canvas').handlers.xrtoggleplay()};
 }
@@ -21,8 +22,8 @@ test('XR native transport toggles playback, uses latest state, clamps and accumu
  assert.deepEqual(h.seeks,[12,17,20,0]);
  h.element('demo').handlers.click();h.seek(5);await h.toggle();assert.deepEqual(h.seeks,[12,17,20,0]);assert.equal(h.played,1);
 });
-test('XR equirectangular transport toggles and clamps seeks; invalid duration is ignored',async()=>{
- const h=harness(false);await h.context.openFile({name:'test.mp4',size:100});h.element('equirect').handlers.click();h.element('video').handlers.loadeddata();
+test('XR flat transport toggles and clamps seeks; invalid duration is ignored',async()=>{
+ const h=harness(false);await h.context.openFile({name:'test.mp4',size:100});h.element('video').handlers.loadeddata();
  await h.toggle();assert.equal(h.element('video').paused,false);await h.toggle();assert.equal(h.element('video').paused,true);
  h.element('video').currentTime=18;h.seek(5);assert.equal(h.element('video').currentTime,20);h.seek(-100);assert.equal(h.element('video').currentTime,0);
  h.element('video').duration=Infinity;h.seek(5);assert.equal(h.element('video').currentTime,0);
@@ -47,16 +48,16 @@ test('VR panel provider reports readiness and buffering separately from play int
  h.panelAction('seek',.75);h.panelAction('seek',-1);h.panelAction('seek',2);h.panelAction('seek',NaN);assert.deepEqual(h.seeks,[15,0,20]);
  const media=h.panelState.mediaId;h.element('demo').handlers.click();assert.notEqual(h.panelState.mediaId,media);assert.equal(h.panelState.canPlay,false);h.panelAction('seek',.5);assert.deepEqual(h.seeks,[15,0,20]);
 });
-test('VR panel absolute equirectangular seek and play use existing transport guards',async()=>{
- const h=harness(false);await h.context.openFile({name:'test.mp4',size:100});h.element('equirect').handlers.click();h.element('video').handlers.loadeddata();
+test('VR panel absolute flat seek and play use existing transport guards',async()=>{
+ const h=harness(false);await h.context.openFile({name:'test.mp4',size:100});h.element('video').handlers.loadeddata();
  h.panelAction('seek',.25);assert.equal(h.element('video').currentTime,5);h.panelAction('play');assert.equal(h.element('video').paused,false);
  h.element('video').readyState=3;assert.equal(h.panelState.advancing,true);h.element('video').seeking=true;assert.equal(h.panelState.advancing,false);
 });
 
-for(const native of [true,false])test(`keyboard transport reaches ${native?'native':'equirectangular'} playback and shared clamped seeking`,async()=>{
+for(const native of [true,false])test(`keyboard transport reaches ${native?'native':'flat'} playback and shared clamped seeking`,async()=>{
  const h=harness(native);h.key(' ');h.key('ArrowRight');assert.equal(h.played,0);assert.deepEqual(h.seeks,[]);
  await h.context.openFile({name:native?'test.360':'test.mp4',size:100});
- if(!native){h.element('equirect').handlers.click();h.element('video').handlers.loadeddata();}
+ if(!native){h.element('video').handlers.loadeddata();}
  h.key(' ');assert.equal(h.played,1);h.key(' ');assert.equal(native?h.player.playing:!h.element('video').paused,false);
  if(native)h.callbacks.onState({playing:false,currentTime:17,duration:20});else h.element('video').currentTime=17;
  h.key('ArrowRight');h.key('ArrowLeft');
