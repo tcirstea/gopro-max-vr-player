@@ -4,17 +4,17 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
-function harness(){
- const elements=new Map(),players=[],pending=new Map();let resets=0,panelProvider;
+function harness({graphicsAvailable=true}={}){
+ const elements=new Map(),players=[],pending=new Map();let resets=0,panelProvider;const mirrorChoices=[];
  const element=id=>{if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,disabled:false,value:0,checked:true,handlers:{},addEventListener(n,f){this.handlers[n]=f;},canPlayType:()=>'',pause(){},load(){},removeAttribute(){},replaceChildren(){}});return elements.get(id);};
- const context=vm.createContext({installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:element},window:{addEventListener(){}},URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},createRenderer:()=>({setSource(){},setMaxSources(){},onXRPanelState(fn){panelProvider=fn;},reset(){resets++;}}),demoPanorama:()=>({}),formatTime:String,inspectFile:async f=>({nativeCandidate:!f.flat,tracks:[],videoTracks:[{}]}),createNativePlayer:async(f,callbacks)=>{
+ const context=vm.createContext({installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:element},window:{addEventListener(){}},URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},createRenderer:()=>{if(!graphicsAvailable)throw Error('WebGL unavailable');return {setDesktopMirror(value){mirrorChoices.push(value);},setSource(){},setMaxSources(){},onXRPanelState(fn){panelProvider=fn;},reset(){resets++;}};},demoPanorama:()=>({}),formatTime:String,inspectFile:async f=>({nativeCandidate:!f.flat,tracks:[],videoTracks:[{}]}),createNativePlayer:async(f,callbacks)=>{
  const player={name:f.name,callbacks,closed:false,duration:10,audioState:{available:!f.silent,modes:f.silent?[]:f.stereo?['stereo']:['stereo','ambisonic'],mode:'stereo'},setMuted(v){this.muted=v;},setVolume(v){this.volume=v;},setAudioMode(v){this.audioState.mode=v;},close(){this.closed=true;}};players.push(player);
  if(f.pending)await new Promise(resolve=>pending.set(f.name,resolve));return player;
  }});
  vm.runInContext(readFileSync(new URL('../src/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,''),context);
  const change=(id,value,event='change')=>{element(id)[id==='muted'?'checked':'value']=value;element(id).handlers[event]();};
  const open=async(name,extra={})=>{await context.openFile({name,size:100,...extra});assert.doesNotMatch(element('status').textContent,/Cannot open/);};
- return {element,context,players,pending,open,change,get panelState(){return panelProvider();},mute:()=>element('canvas').handlers.xrpanelaction({detail:{action:'mute'}}),get resets(){return resets;}};
+ return {element,context,players,pending,open,change,mirrorChoices,get panelState(){return panelProvider();},mute:()=>element('canvas').handlers.xrpanelaction({detail:{action:'mute'}}),get resets(){return resets;}};
 }
 test('audio preferences survive native, flat and demo switches and explicit view reset is separate',async()=>{
  const h=harness();await h.open('one');h.change('muted',false);h.change('volume',.35,'input');h.change('audio-mode','ambisonic');
@@ -71,4 +71,24 @@ test('identical frame audio state does not repeatedly mutate the live status reg
  const player=h.players[0],state={audio:player.audioState,currentTime:1,duration:10,playing:true};
  player.callbacks.onState(state);player.callbacks.onState({...state,currentTime:2});assert.equal(writes,0);
  h.change('audio-mode','ambisonic');assert.equal(writes,1);player.callbacks.onState({...state,currentTime:3});assert.equal(writes,1);
+});
+
+
+test('desktop mirror is explicit session-only opt-in and follows renderer state/errors without changing playback preferences',async()=>{
+ const h=harness(),classes=[];h.element('viewer').classList={toggle:(name,value)=>classes.push([name,value])};
+ assert.equal(h.element('desktop-mirror').checked,false);assert.equal(h.element('desktop-mirror').disabled,false);assert.deepEqual(h.mirrorChoices,[]);
+ h.element('desktop-mirror').checked=true;h.element('desktop-mirror').handlers.change();assert.deepEqual(h.mirrorChoices,[true]);
+ h.element('canvas').handlers.xrmirrorchange({detail:{enabled:true,active:true}});assert.deepEqual(classes.at(-1),['xr-mirror-active',true]);
+ await h.open('one');await h.open('two');assert.equal(h.element('desktop-mirror').checked,true);assert.deepEqual(h.mirrorChoices,[true]);
+ h.element('canvas').handlers.xrmirrorchange({detail:{enabled:false,active:false}});h.element('canvas').handlers.xrmirrorerror({detail:'Desktop mirror stopped.'});
+ assert.equal(h.element('desktop-mirror').checked,false);assert.deepEqual(classes.at(-1),['xr-mirror-active',false]);assert.equal(h.element('status').textContent,'Desktop mirror stopped.');
+ assert.equal(h.element('muted').checked,true);assert.equal(h.players.at(-1).closed,false);
+ assert.equal(harness().element('desktop-mirror').checked,false,'reload never restores an enabled mirror');
+ const unavailable=harness({graphicsAvailable:false});assert.equal(unavailable.element('desktop-mirror').disabled,true);assert.equal(unavailable.element('desktop-mirror').checked,false);
+});
+test('mirror UI explains monitor visibility, costs and standalone limits and retains browser VR exit/fullscreen',()=>{
+ const html=readFileSync(new URL('../index.html',import.meta.url),'utf8'),css=readFileSync(new URL('../src/style.css',import.meta.url),'utf8');
+ const input=html.match(/<input id="desktop-mirror"[^>]*>/)[0];assert.doesNotMatch(input,/checked/);assert.match(input,/aria-describedby="desktop-mirror-note"/);assert.match(input,/autocomplete="off"/);
+ assert.match(html,/Anyone viewing this screen can see the video and any open VR playlist/);assert.match(html,/GPU load/);assert.match(html,/No casting or uploads/);assert.match(html,/Standalone Quest does not send this view to a separate computer/);
+ assert.match(css,/\.xr-mirror-active \.viewer-bottom>div/);assert.doesNotMatch(css,/\.xr-mirror-active \.viewer-bottom[,\{]/);
 });

@@ -30,6 +30,7 @@ export function createRenderer(canvas) {
   let xrTransition=null;
   let xrCenter=quaternionMatrix(IDENTITY_QUATERNION),pendingRecenter=false;
   let xrPanel=null,panelStateCallback=null;
+  let desktopMirror=false,mirrorPainted=false;
   const panelError=error=>canvas.dispatchEvent(new CustomEvent('xrerror',{detail:`VR controls: ${error.message}`}));
   function togglePanel(input,reveal=false){
     try{
@@ -47,8 +48,76 @@ export function createRenderer(canvas) {
   function upload(s,i){gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,textures[i]);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,s);}
   function uploadSource(){if(source&&(dirty||(source.tagName==='VIDEO'&&!source.paused))&&(source.tagName!=='VIDEO'||source.readyState>=2)){try{upload(source,0);}catch(error){source=null;canvas.dispatchEvent(new CustomEvent('rendererror',{detail:error.message}));}}dirty=false;}
   function render(w,h,xr=false){for(const [n,v]of Object.entries({aspect:w/Math.max(1,h),yaw,pitch,roll,fov,mode,xr:xr?1:0}))gl.uniform1f(loc(n),v);gl.uniformMatrix3fv(loc('stabilization'),false,stabilization);gl.uniformMatrix3fv(loc('xrCenter'),false,xrCenter);gl.drawArrays(gl.TRIANGLES,0,6);}
-  function draw(time){requestAnimationFrame(draw);if(gl.isContextLost()||session)return;frameCallback?.(time);uploadSource();reportView();const scale=Math.min(globalThis.devicePixelRatio||1,2),w=Math.max(1,Math.round(canvas.clientWidth*scale)),h=Math.max(1,Math.round(canvas.clientHeight*scale));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,w,h);render(w,h);}
-  function xrDraw(time,frame){if(!session||(frame.session&&frame.session!==session))return;session.requestAnimationFrame(xrDraw);xrControls.update(session,time);const pose=frame.getViewerPose(referenceSpace);if(!pose){viewDrag.rebase();xrPanel?.reset();return;}if(pendingRecenter){xrCenter=inverseViewRotation(pose.transform.matrix);yaw=0;pitch=0;roll=0;fov=Math.PI/2;pendingRecenter=false;viewDrag.rebase();}const dragSpace=dragSource?.gripSpace||dragSource?.targetRaySpace;const controllerPose=dragSpace?frame.getPose?.(dragSpace,referenceSpace):null;xrCenter=viewDrag.update(xrCenter,pose.transform.matrix,controllerPose?.transform.matrix);frameCallback?.(time);try{xrPanel?.update(session,time,frame,referenceSpace,pose.transform.matrix);}catch(error){xrPanel?.reset();panelError(error);}uploadSource();reportView(pose.transform.matrix);const layer=session.renderState.baseLayer;gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);gl.clear(gl.COLOR_BUFFER_BIT);for(const view of pose.views){const v=layer.getViewport(view);gl.viewport(v.x,v.y,v.width,v.height);gl.uniformMatrix4fv(loc('invProjection'),false,invert4(view.projectionMatrix));gl.uniformMatrix4fv(loc('viewRotation'),false,view.transform.matrix);render(v.width,v.height,true);try{xrPanel?.draw(view);}catch(error){xrPanel?.reset();panelError(error);}}}
+  function resizeDesktop(maxDimension=Infinity){
+    const scale=Math.min(globalThis.devicePixelRatio||1,2),width=Math.max(1,Math.round(canvas.clientWidth*scale)),height=Math.max(1,Math.round(canvas.clientHeight*scale));
+    const reduction=Math.min(1,maxDimension/Math.max(width,height)),w=Math.max(1,Math.round(width*reduction)),h=Math.max(1,Math.round(height*reduction));
+    if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
+    return {w,h};
+  }
+  function mirrorChanged(){canvas.dispatchEvent(new CustomEvent('xrmirrorchange',{detail:{enabled:desktopMirror,active:desktopMirror&&!!session}}));}
+  // Clear a previously mirrored image immediately on opt-out/tracking loss.
+  // Never leave a stale headset frame exposed, or touch the XR layer here.
+  function clearMirror(){
+    if(!mirrorPainted)return;mirrorPainted=false;
+    if(gl.isContextLost())return;
+    const framebuffer=gl.getParameter(gl.FRAMEBUFFER_BINDING);
+    try{gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);}
+    finally{gl.bindFramebuffer(gl.FRAMEBUFFER,framebuffer);}
+  }
+  function drawXRView(view,viewport){
+    gl.viewport(viewport.x,viewport.y,viewport.width,viewport.height);
+    gl.uniformMatrix4fv(loc('invProjection'),false,invert4(view.projectionMatrix));
+    gl.uniformMatrix4fv(loc('viewRotation'),false,view.transform.matrix);
+    render(viewport.width,viewport.height,true);
+    try{xrPanel?.draw(view);}catch(error){xrPanel?.reset();panelError(error);}
+  }
+  function drawDesktopMirror(pose,layer){
+    if(!desktopMirror)return;
+    const view=pose.views.find(view=>view.eye==='left')||pose.views[0];
+    const eyeViewport=view&&layer.getViewport(view);
+    if(!eyeViewport||!(eyeViewport.width>0&&eyeViewport.height>0)||!(canvas.clientWidth>0&&canvas.clientHeight>0)){clearMirror();return;}
+    // Reuse a real eye's projection and pose, including asymmetric frusta, so
+    // zoom and all panorama corrections are identical. Letterbox, never stretch.
+    // This is another draw of existing textures, not readback, capture or decode.
+    const {w,h}=resizeDesktop(1280),viewport=mirrorViewport(w,h,eyeViewport);
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);mirrorPainted=true;
+    gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);
+    drawXRView(view,viewport);
+  }
+  function draw(time){
+    requestAnimationFrame(draw);if(gl.isContextLost()||session)return;
+    frameCallback?.(time);uploadSource();reportView();const {w,h}=resizeDesktop();
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,w,h);render(w,h);
+  }
+  function xrDraw(time,frame){
+    if(!session||(frame.session&&frame.session!==session))return;
+    session.requestAnimationFrame(xrDraw);if(gl.isContextLost())return;
+    xrControls.update(session,time);const pose=frame.getViewerPose(referenceSpace);
+    if(!pose){viewDrag.rebase();xrPanel?.reset();clearMirror();return;}
+    if(pendingRecenter){xrCenter=inverseViewRotation(pose.transform.matrix);yaw=0;pitch=0;roll=0;fov=Math.PI/2;pendingRecenter=false;viewDrag.rebase();}
+    const dragSpace=dragSource?.gripSpace||dragSource?.targetRaySpace;
+    const controllerPose=dragSpace?frame.getPose?.(dragSpace,referenceSpace):null;
+    xrCenter=viewDrag.update(xrCenter,pose.transform.matrix,controllerPose?.transform.matrix);
+    frameCallback?.(time);
+    try{xrPanel?.update(session,time,frame,referenceSpace,pose.transform.matrix);}catch(error){xrPanel?.reset();panelError(error);}
+    uploadSource();reportView(pose.transform.matrix);
+    const layer=session.renderState.baseLayer;
+    gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);gl.clear(gl.COLOR_BUFFER_BIT);
+    let lastViewport=null;
+    for(const view of pose.views){lastViewport=layer.getViewport(view);drawXRView(view,lastViewport);}
+    if(!desktopMirror)return;
+    try{
+      if((session.visibilityState&&session.visibilityState!=='visible')||document.hidden){clearMirror();return;}
+      drawDesktopMirror(pose,layer);
+    }catch{
+      // A monitor-only failure must not stop headset playback or the next frame.
+      desktopMirror=false;clearMirror();mirrorChanged();
+      canvas.dispatchEvent(new CustomEvent('xrmirrorerror',{detail:'Desktop mirror stopped. Headset playback can continue; try enabling the mirror again or leave it off.'}));
+    }finally{
+      gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);
+      if(lastViewport)gl.viewport(lastViewport.x,lastViewport.y,lastViewport.width,lastViewport.height);
+    }
+  }
   function endPointer(){
     const pointer=lastPointer;lastPointer=null;
     if(pointer&&canvas.hasPointerCapture?.(pointer.id))canvas.releasePointerCapture(pointer.id);
@@ -76,13 +145,13 @@ export function createRenderer(canvas) {
   for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,e=>{if(e.pointerId===lastPointer?.id)endPointer();});
   canvas.addEventListener('blur',endPointer);
   globalThis.window?.addEventListener('blur',endPointer);
-  document.addEventListener?.('visibilitychange',()=>{if(document.hidden)endPointer();});
+  document.addEventListener?.('visibilitychange',()=>{if(document.hidden){endPointer();clearMirror();}});
   canvas.addEventListener('contextmenu',e=>e.preventDefault());
   canvas.addEventListener('auxclick',e=>{if(e.button===1)e.preventDefault();});
   canvas.addEventListener('wheel',e=>{e.preventDefault();const time=e.timeStamp??performance.now();if(lastWheelTime===null||time-lastWheelTime>=150)zoomDetents.release();lastWheelTime=time;fov=zoomDetents.apply(fov,e.deltaY,time);},{passive:false});
   canvas.addEventListener('keydown',e=>{if(e.defaultPrevented||e.isComposing||e.altKey||e.ctrlKey||e.metaKey||!['ArrowUp','ArrowDown','+','=','-'].includes(e.key))return;e.preventDefault();pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.key==='ArrowUp'?.1:e.key==='ArrowDown'?-.1:0)));const delta=e.key==='-'?100:['+','='].includes(e.key)?-100:0;if(delta)fov=zoomDetents.apply(fov,delta,e.timeStamp??performance.now());});
   canvas.addEventListener('keyup',e=>{if(['+','=','-'].includes(e.key))zoomDetents.release();});
-  canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();canvas.dispatchEvent(new CustomEvent('rendererror',{detail:'Graphics context lost. Reload the player to restore playback.'}));});
+  canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();mirrorPainted=false;canvas.dispatchEvent(new CustomEvent('rendererror',{detail:'Graphics context lost. Reload the player to restore playback.'}));});
   requestAnimationFrame(draw);
   const api={setSource(next){source=next;mode=0;dirty=true;stabilization=quaternionMatrix(IDENTITY_QUATERNION);},
     // Synchronous GPU upload. Caller retains ownership and may close frames immediately.
@@ -90,6 +159,9 @@ export function createRenderer(canvas) {
     // A single active render loop drives native media even when immersive XR
     // suppresses window animation frames; advance before texture/view upload.
     hideXRControls(){xrPanel?.reset();},
+    setDesktopMirror(enabled){
+      desktopMirror=!!enabled;if(!desktopMirror)clearMirror();mirrorChanged();
+    },
     onXRPanelState(callback){panelStateCallback=callback;return ()=>{if(panelStateCallback===callback)panelStateCallback=null;};},
     onBeforeRender(callback){frameCallback=callback;return ()=>{if(frameCallback===callback)frameCallback=null;};},
     // Camera-to-raw-source sampling rotation, column-major. Includes XR and
@@ -110,7 +182,7 @@ export function createRenderer(canvas) {
           ended=true;
           if(session!==next)return;
           xrControls.reset();viewDrag.reset();xrPanel?.reset();dragSource=null;pendingRecenter=false;xrCenter=quaternionMatrix(IDENTITY_QUATERNION);
-          session=null;referenceSpace=null;canvas.dispatchEvent(new Event('vrend'));
+          clearMirror();session=null;referenceSpace=null;if(desktopMirror)mirrorChanged();canvas.dispatchEvent(new Event('vrend'));
         });
         try{
           await gl.makeXRCompatible();
@@ -119,7 +191,8 @@ export function createRenderer(canvas) {
           if(ended)return;
           next.updateRenderState({baseLayer:new XRWebGLLayer(next,gl)});
           referenceSpace=ref;session=next;xrCenter=quaternionMatrix(IDENTITY_QUATERNION);pendingRecenter=false;xrControls.reset();viewDrag.reset();xrPanel?.reset();dragSource=null;
-          next.addEventListener('visibilitychange',()=>{if(session===next){xrControls.reset();viewDrag.reset();xrPanel?.reset();dragSource=null;pendingRecenter=false;}});
+          if(desktopMirror)mirrorChanged();
+          next.addEventListener('visibilitychange',()=>{if(session===next){xrControls.reset();viewDrag.reset();xrPanel?.reset();dragSource=null;pendingRecenter=false;if(next.visibilityState!=='visible')clearMirror();}});
           next.requestAnimationFrame(xrDraw);
         }catch(error){
           // Preserve the original setup error even if runtime cleanup also fails.
@@ -145,6 +218,13 @@ export function createRenderer(canvas) {
     canvas.addEventListener('vrend',()=>vr.textContent='Enter VR');
   }
   return api;
+}
+// Fit one eye's render aspect without cropping its field of view. Coordinates
+// are drawing-buffer pixels; black bars stay outside the returned viewport.
+export function mirrorViewport(width,height,eye){
+  const scale=Math.min(width/eye.width,height/eye.height);
+  const w=Math.max(1,Math.round(eye.width*scale)),h=Math.max(1,Math.round(eye.height*scale));
+  return {x:Math.floor((width-w)/2),y:Math.floor((height-h)/2),width:w,height:h};
 }
 // Gauss-Jordan inversion; column-major WebXR matrices.
 export function invert4(input){const rows=Array.from({length:4},(_,r)=>Array.from({length:8},(_,c)=>c<4?input[c*4+r]:+(c-4===r)));for(let c=0;c<4;c++){let pivot=c;for(let r=c+1;r<4;r++)if(Math.abs(rows[r][c])>Math.abs(rows[pivot][c]))pivot=r;if(Math.abs(rows[pivot][c])<1e-12)throw new Error('Singular projection matrix');[rows[c],rows[pivot]]=[rows[pivot],rows[c]];const n=rows[c][c];rows[c]=rows[c].map(v=>v/n);for(let r=0;r<4;r++)if(r!==c){const k=rows[r][c];rows[r]=rows[r].map((v,i)=>v-k*rows[c][i]);}}return new Float32Array(Array.from({length:16},(_,i)=>rows[i%4][4+Math.floor(i/4)]));}

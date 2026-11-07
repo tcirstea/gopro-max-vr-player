@@ -114,6 +114,15 @@ syncPlaylist();
 const status=message=>$('status').textContent=message;
 function playbackStatus(message){const element=$('playback-state');if(element.textContent!==message)element.textContent=message;element.hidden=!message;}
 try{renderer=createRenderer($('canvas'));renderer.setSource(demoPanorama());renderer.onBeforeRender?.(time=>nativePlayer?.advance(time));renderer.onViewOrientation?.(rotation=>nativePlayer?.setViewRotation(rotation));}catch(error){status(error.message);}
+// Explicit, session-only opt-in: never restore sharing a headset view on reload.
+$('desktop-mirror').checked=false;
+$('desktop-mirror').disabled=!renderer;
+$('desktop-mirror').addEventListener('change',()=>renderer?.setDesktopMirror?.($('desktop-mirror').checked));
+$('canvas').addEventListener('xrmirrorchange',event=>{
+ $('desktop-mirror').checked=event.detail.enabled;
+ $('viewer').classList?.toggle('xr-mirror-active',event.detail.active);
+});
+$('canvas').addEventListener('xrmirrorerror',event=>status(event.detail));
 // Read live transport state each XR frame; buffering must not consume the
 // panel's two seconds of actual playback. The provider also works in demo mode.
 renderer?.onXRPanelState?.(()=>({
