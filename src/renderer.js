@@ -8,11 +8,11 @@ export function createRenderer(canvas) {
   const gl=canvas.getContext('webgl',{alpha:false,antialias:false,xrCompatible:true});
   if(!gl)throw new Error('WebGL is unavailable. Enable hardware acceleration.');
   const vertex='attribute vec2 p; varying vec2 uv; void main(){uv=p;gl_Position=vec4(p,0.,1.);}';
-  const fragment=`precision highp float; varying vec2 uv; uniform sampler2D panorama; uniform float aspect,yaw,pitch,fov,mode,xr;uniform mat4 invProjection,viewRotation;uniform mat3 stabilization,xrCenter;
+  const fragment=`precision highp float; varying vec2 uv; uniform sampler2D panorama; uniform float aspect,yaw,pitch,roll,fov,mode,xr;uniform mat4 invProjection,viewRotation;uniform mat3 stabilization,xrCenter;
   ${MAX_GLSL}
   void main(){vec3 d;
   if(xr>.5){vec3 eyeRay=(invProjection*vec4(uv,-1.,1.)).xyz;eyeRay.xy*=tan(fov/2.);d=normalize(xrCenter*mat3(viewRotation)*eyeRay);}
-  else {d=normalize(vec3(uv.x*aspect*tan(fov/2.),uv.y*tan(fov/2.),-1.));d=vec3(d.x,d.y*cos(pitch)-d.z*sin(pitch),d.y*sin(pitch)+d.z*cos(pitch));}
+  else {d=normalize(vec3(uv.x*aspect*tan(fov/2.),uv.y*tan(fov/2.),-1.));d=vec3(d.x*cos(roll)-d.y*sin(roll),d.x*sin(roll)+d.y*cos(roll),d.z);d=vec3(d.x,d.y*cos(pitch)-d.z*sin(pitch),d.y*sin(pitch)+d.z*cos(pitch));}
   d=vec3(d.x*cos(yaw)+d.z*sin(yaw),d.y,-d.x*sin(yaw)+d.z*cos(yaw));
   d=stabilization*d;
   vec2 st=vec2(atan(d.x,-d.z)/6.2831853+.5,asin(clamp(d.y,-1.,1.))/3.14159265+.5);
@@ -25,7 +25,7 @@ export function createRenderer(canvas) {
   const uniforms={};const loc=n=>uniforms[n]??(uniforms[n]=gl.getUniformLocation(program,n));
   const textures=[0,1].map(i=>{const t=gl.createTexture();gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,t);for(const pname of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,pname,gl.LINEAR);for(const pname of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,pname,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0,255]));return t;});
   gl.uniform1i(loc('panorama'),0);gl.uniform1i(loc('trackOne'),1);
-  let source=null,dirty=true,yaw=0,pitch=0,fov=Math.PI/2,lastPointer=null,mode=0,session=null,referenceSpace=null;
+  let source=null,dirty=true,yaw=0,pitch=0,roll=0,fov=Math.PI/2,lastPointer=null,mode=0,session=null,referenceSpace=null;
   let stabilization=quaternionMatrix(IDENTITY_QUATERNION),orientationCallback=null,frameCallback=null,lastView=quaternionMatrix(IDENTITY_QUATERNION);
   let xrTransition=null;
   let xrCenter=quaternionMatrix(IDENTITY_QUATERNION),pendingRecenter=false;
@@ -43,12 +43,12 @@ export function createRenderer(canvas) {
   const zoomDetents=createZoomDetents();let lastWheelTime=null;
   const viewDrag=createXRViewDrag();let dragSource=null;
   const xrControls=createXRControls({togglePanel,showPanel:input=>togglePanel(input,true),zoom:(delta,time)=>{fov=zoomDetents.apply(fov,delta,time);},zoomEnd:()=>zoomDetents.release(),seek:seconds=>canvas.dispatchEvent(new CustomEvent('xrseek',{detail:seconds})),togglePlayback:()=>canvas.dispatchEvent(new Event('xrtoggleplay')),resetZoom:()=>{fov=Math.PI/2;zoomDetents.reset();},dragView:(active,input)=>{dragSource=active?input:null;viewDrag.setActive(active);}});
-  function reportView(pose=null){const view=pose?multiplyMatrix3(viewRotationMatrix(yaw,0),multiplyMatrix3(xrCenter,viewRotationMatrix(0,0,pose))):viewRotationMatrix(yaw,pitch);lastView=multiplyMatrix3(stabilization,view);orientationCallback?.(lastView.slice());}
+  function reportView(pose=null){const view=pose?multiplyMatrix3(viewRotationMatrix(yaw,0),multiplyMatrix3(xrCenter,viewRotationMatrix(0,0,pose))):multiplyMatrix3(viewRotationMatrix(yaw,pitch),quaternionMatrix([Math.cos(roll/2),0,0,Math.sin(roll/2)]));lastView=multiplyMatrix3(stabilization,view);orientationCallback?.(lastView.slice());}
   function upload(s,i){gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,textures[i]);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,s);}
   function uploadSource(){if(source&&(dirty||(source.tagName==='VIDEO'&&!source.paused))&&(source.tagName!=='VIDEO'||source.readyState>=2)){try{upload(source,0);}catch(error){source=null;canvas.dispatchEvent(new CustomEvent('rendererror',{detail:error.message}));}}dirty=false;}
-  function render(w,h,xr=false){for(const [n,v]of Object.entries({aspect:w/Math.max(1,h),yaw,pitch,fov,mode,xr:xr?1:0}))gl.uniform1f(loc(n),v);gl.uniformMatrix3fv(loc('stabilization'),false,stabilization);gl.uniformMatrix3fv(loc('xrCenter'),false,xrCenter);gl.drawArrays(gl.TRIANGLES,0,6);}
+  function render(w,h,xr=false){for(const [n,v]of Object.entries({aspect:w/Math.max(1,h),yaw,pitch,roll,fov,mode,xr:xr?1:0}))gl.uniform1f(loc(n),v);gl.uniformMatrix3fv(loc('stabilization'),false,stabilization);gl.uniformMatrix3fv(loc('xrCenter'),false,xrCenter);gl.drawArrays(gl.TRIANGLES,0,6);}
   function draw(time){requestAnimationFrame(draw);if(gl.isContextLost()||session)return;frameCallback?.(time);uploadSource();reportView();const scale=Math.min(globalThis.devicePixelRatio||1,2),w=Math.max(1,Math.round(canvas.clientWidth*scale)),h=Math.max(1,Math.round(canvas.clientHeight*scale));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,w,h);render(w,h);}
-  function xrDraw(time,frame){if(!session||(frame.session&&frame.session!==session))return;session.requestAnimationFrame(xrDraw);xrControls.update(session,time);const pose=frame.getViewerPose(referenceSpace);if(!pose){viewDrag.rebase();xrPanel?.reset();return;}if(pendingRecenter){xrCenter=inverseViewRotation(pose.transform.matrix);yaw=0;pitch=0;fov=Math.PI/2;pendingRecenter=false;viewDrag.rebase();}const dragSpace=dragSource?.gripSpace||dragSource?.targetRaySpace;const controllerPose=dragSpace?frame.getPose?.(dragSpace,referenceSpace):null;xrCenter=viewDrag.update(xrCenter,pose.transform.matrix,controllerPose?.transform.matrix);frameCallback?.(time);try{xrPanel?.update(session,time,frame,referenceSpace,pose.transform.matrix);}catch(error){xrPanel?.reset();panelError(error);}uploadSource();reportView(pose.transform.matrix);const layer=session.renderState.baseLayer;gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);gl.clear(gl.COLOR_BUFFER_BIT);for(const view of pose.views){const v=layer.getViewport(view);gl.viewport(v.x,v.y,v.width,v.height);gl.uniformMatrix4fv(loc('invProjection'),false,invert4(view.projectionMatrix));gl.uniformMatrix4fv(loc('viewRotation'),false,view.transform.matrix);render(v.width,v.height,true);try{xrPanel?.draw(view);}catch(error){xrPanel?.reset();panelError(error);}}}
+  function xrDraw(time,frame){if(!session||(frame.session&&frame.session!==session))return;session.requestAnimationFrame(xrDraw);xrControls.update(session,time);const pose=frame.getViewerPose(referenceSpace);if(!pose){viewDrag.rebase();xrPanel?.reset();return;}if(pendingRecenter){xrCenter=inverseViewRotation(pose.transform.matrix);yaw=0;pitch=0;roll=0;fov=Math.PI/2;pendingRecenter=false;viewDrag.rebase();}const dragSpace=dragSource?.gripSpace||dragSource?.targetRaySpace;const controllerPose=dragSpace?frame.getPose?.(dragSpace,referenceSpace):null;xrCenter=viewDrag.update(xrCenter,pose.transform.matrix,controllerPose?.transform.matrix);frameCallback?.(time);try{xrPanel?.update(session,time,frame,referenceSpace,pose.transform.matrix);}catch(error){xrPanel?.reset();panelError(error);}uploadSource();reportView(pose.transform.matrix);const layer=session.renderState.baseLayer;gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);gl.clear(gl.COLOR_BUFFER_BIT);for(const view of pose.views){const v=layer.getViewport(view);gl.viewport(v.x,v.y,v.width,v.height);gl.uniformMatrix4fv(loc('invProjection'),false,invert4(view.projectionMatrix));gl.uniformMatrix4fv(loc('viewRotation'),false,view.transform.matrix);render(v.width,v.height,true);try{xrPanel?.draw(view);}catch(error){xrPanel?.reset();panelError(error);}}}
   function endPointer(){
     const pointer=lastPointer;lastPointer=null;
     if(pointer&&canvas.hasPointerCapture?.(pointer.id))canvas.releasePointerCapture(pointer.id);
@@ -63,8 +63,14 @@ export function createRenderer(canvas) {
   canvas.addEventListener('pointermove',e=>{
     if(!lastPointer||e.pointerId!==lastPointer.id)return;
     if(e.buttons!==undefined&&!(e.buttons&(lastPointer.button===2?2:1))){endPointer();return;}
-    yaw+=(e.clientX-lastPointer.x)*.004;
-    pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.clientY-lastPointer.y)*.004));
+    if(lastPointer.button===2){
+      // Camera-local Z: rightward dragging turns the image clockwise without
+      // changing the center ray. Apply before pitch/yaw in both shader and audio.
+      roll=(roll+(e.clientX-lastPointer.x)*.004)%(2*Math.PI);
+    }else{
+      yaw+=(e.clientX-lastPointer.x)*.004;
+      pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.clientY-lastPointer.y)*.004));
+    }
     lastPointer.x=e.clientX;lastPointer.y=e.clientY;
   });
   for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,e=>{if(e.pointerId===lastPointer?.id)endPointer();});
@@ -90,7 +96,7 @@ export function createRenderer(canvas) {
     // gyro correction so an ambisonic listener follows the displayed view.
     onViewOrientation(callback){orientationCallback=callback;return ()=>{if(orientationCallback===callback)orientationCallback=null;};},
     getViewOrientation(){return lastView.slice();},
-    refresh(){dirty=true;},reset(){yaw=0;pitch=0;fov=Math.PI/2;zoomDetents.reset();pendingRecenter=!!session;},
+    refresh(){dirty=true;},reset(){endPointer();yaw=0;pitch=0;roll=0;fov=Math.PI/2;zoomDetents.reset();pendingRecenter=!!session;},
     async enterVR(){
       // requestSession must start in the user gesture, but only once while entry,
       // setup or exit is pending. A rapid second click joins the same operation.

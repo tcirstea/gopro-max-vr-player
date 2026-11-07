@@ -59,11 +59,14 @@ test('XR controller zoom reaches shader FOV and transport events while desktop w
   const renderer=createRenderer(canvas);const matrix=[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];
   const frame={getViewerPose:()=>({transform:{matrix},views:[{projectionMatrix:matrix,transform:{matrix}}]})};
   events.wheel({deltaY:-12,preventDefault(){}});windowFrame(0);const wheelFov=uniforms.fov;
-  renderer.reset();await renderer.enterVR();xrFrame(0,frame);input.gamepad.axes[3]=-1;xrFrame(20,frame);
+  renderer.reset();
+  events.pointerdown({pointerId:1,button:2,clientX:0,clientY:0});events.pointermove({pointerId:1,clientX:100,clientY:100,buttons:2});events.pointerup({pointerId:1});windowFrame(1);
+  const desktopRolled=renderer.getViewOrientation();assert.equal(uniforms.roll,.4);
+  await renderer.enterVR();xrFrame(0,frame);near(renderer.getViewOrientation(),[1,0,0,0,1,0,0,0,1]);assert.equal(uniforms.roll,.4,'desktop roll retained but not applied to XR');input.gamepad.axes[3]=-1;xrFrame(20,frame);
   assert.equal(uniforms.fov,wheelFov);assert.match(fragment,/eyeRay\.xy\*=tan\(fov\/2\.\)/);
   input.gamepad.axes=[0,0,1,0];xrFrame(30,frame);assert.equal(dispatched.at(-1).type,'xrseek');assert.equal(dispatched.at(-1).detail,5);
   input.gamepad.buttons[4].pressed=true;xrFrame(40,frame);assert.equal(dispatched.at(-1).type,'xrtoggleplay');
-  await renderer.enterVR();const count=dispatched.length;windowFrame(50);assert.equal(dispatched.length,count);
+  await renderer.enterVR();const count=dispatched.length;windowFrame(50);assert.equal(dispatched.length,count);near(renderer.getViewOrientation(),desktopRolled);
   await renderer.enterVR();xrFrame(60,frame);assert.equal(dispatched.filter(e=>e.type==='xrtoggleplay').length,1,'held button does not toggle on reentry');
  }finally{for(const key of keys){if(saved[key])Object.defineProperty(globalThis,key,saved[key]);else delete globalThis[key];}}
 });

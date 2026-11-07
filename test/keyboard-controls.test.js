@@ -42,3 +42,12 @@ test('repeat rechecks live transport, dialog and focus state; modifiers cancel a
   const h=harness();h.key('ArrowLeft');change(h);h.tick();assert.deepEqual(h.seeks,[-5]);assert.equal(h.intervals.size,0);
  }
 });
+
+test('on-page control help matches keyboard, mouse and bumper behavior',async()=>{
+ const {readFileSync}=await import('node:fs');
+ const html=readFileSync(new URL('../index.html',import.meta.url),'utf8');
+ assert.match(html,/Space plays or pauses/);assert.match(html,/Left and right arrows seek five seconds/);
+ assert.match(html,/Left mouse drag/);assert.match(html,/Right mouse drag horizontally rolls the view/);assert.match(html,/Middle click resets zoom/);
+ assert.match(html,/aiming away from the panel to hide it/);assert.match(html,/current video’s page/);
+ assert.doesNotMatch(html,/Arrow keys to (rotate|turn)/);
+});
