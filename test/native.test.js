@@ -37,7 +37,7 @@ test('decoder backpressure bounds retained inputs even if codec never emits',asy
 
 // Simulates codecs whose requests dequeue immediately but outputs are held by
 // the hardware until a batch is available (unlike immediate-output mocks).
-async function delayedHarness(run){
+async function delayedHarness(run,{initialTime=0}={}){
  const keys=['isSecureContext','VideoDecoder','EncodedVideoChunk','requestAnimationFrame','cancelAnimationFrame'];
  const saved=Object.fromEntries(keys.map(k=>[k,globalThis[k]]));
  const decoders=[],allFrames=[],presented=[];let callback;
@@ -51,7 +51,7 @@ async function delayedHarness(run){
  Object.assign(globalThis,{isSecureContext:true,VideoDecoder:Decoder,EncodedVideoChunk:class{constructor(x){Object.assign(this,x);}},requestAnimationFrame:cb=>{callback=cb;return 1;},cancelAnimationFrame:()=>{}});
  const settle=()=>new Promise(r=>setImmediate(r));
  let p;
- try{p=await createNativePlayer(fixture({counts:[100,100]}),{onFrames:(a,b)=>{assert.equal(a.timestamp,b.timestamp);presented.push(a.timestamp);}});await settle();await run({p,decoders,allFrames,presented,tick:n=>callback(n),settle});}
+ try{p=await createNativePlayer(fixture({counts:[100,100]}),{initialTime,onFrames:(a,b)=>{assert.equal(a.timestamp,b.timestamp);presented.push(a.timestamp);}});await settle();await run({p,decoders,allFrames,presented,tick:n=>callback(n),settle});}
  finally{p?.close();assert.ok(allFrames.every(f=>f.closed));Object.assign(globalThis,saved);}
 }
 test('delayed outputs beyond eight inputs can progress; only one paired upload per animation frame',async()=>{
@@ -164,4 +164,21 @@ test('unsupported WebCodecs or codec closes a transferred native movie',async()=
   const movie=await demuxNative(fixture());await movie.prepare();globalThis.isSecureContext=supportedContext;globalThis.VideoDecoder=class{static async isConfigSupported(){return {supported:false};}constructor(){assert.fail('Cannot allocate unsupported decoder');}};
   await assert.rejects(createNativePlayer({}, {preparedMovie:movie,onFrames(){}}),/secure context|cannot decode/);assert.equal(movie.getReadDiagnostics()[0].cachedBytes,0);
  }}finally{globalThis.isSecureContext=secure;globalThis.VideoDecoder=decoder;}
+});
+
+
+test('native clock getter follows natural playback and stays exact while paused or buffering',async()=>{
+ await delayedHarness(async({p,decoders,tick,settle})=>{
+  decoders.forEach(d=>d.emit(12));await settle();tick(0);p.play();tick(1);tick(101);
+  assert.equal(p.currentTime,.1);assert.equal(p.getDiagnostics().state.currentTime,.08);
+  p.pause();assert.equal(p.currentTime,.1);tick(10000);assert.equal(p.currentTime,.1);
+  p.seek(1.234);assert.equal(p.currentTime,1.234);p.play();tick(10001);assert.equal(p.currentTime,1.234);
+ });
+});
+test('native initial offset starts paired decoding at requested time without an extra seek or autoplay',async()=>{
+ await delayedHarness(async({p,decoders,tick,settle,presented})=>{
+  assert.equal(p.playing,false);assert.equal(p.currentTime,1.234);assert.equal(p.getDiagnostics().counters.seeks,1);
+  for(let i=0;i<5&&!presented.length;i++){decoders.forEach(d=>d.emit());await settle();tick(i);}
+  assert.equal(presented[0],1200000);assert.equal(p.currentTime,1.234);assert.equal(p.playing,false);
+ },{initialTime:1.234});
 });

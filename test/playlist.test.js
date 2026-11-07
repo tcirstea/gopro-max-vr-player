@@ -1,3 +1,4 @@
+import {resolvePlaylistSeek,readPlaylistSeekDuration} from '../src/playlist-seek.js';
 import {createNextClipPreloader,shouldPreloadNext} from '../src/next-clip-preload.js';
 import {installKeyboardControls} from '../src/keyboard-controls.js';
 import {createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS} from '../src/playlist-model.js';
@@ -6,10 +7,10 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 const source=readFileSync(new URL('../src/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
-function setup({inspect,create,prepare}={}){
+function setup({inspect,create,prepare,readDuration}={}){
  const elements=new Map(),players=[],revoked=[],createdObjects=[],sources=[],windowHandlers={};
  function el(id){if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,value:0,checked:true,paused:true,handlers:{},addEventListener(name,fn){(this.handlers[name]??=[]).push(fn);},emit(name){for(const fn of this.handlers[name]||[])fn({target:this});},canPlayType(){return '';},pause(){this.paused=true;},play(){this.paused=false;return Promise.resolve();},load(){this.readyState=0;},removeAttribute(){},replaceChildren(...children){this.children=children;}});return elements.get(id);}
- const context=vm.createContext({createNextClipPreloader,shouldPreloadNext,prepareNextClip:prepare|| (async()=>null),installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:el,createElement:()=>({})},window:{addEventListener(name,fn){windowHandlers[name]=fn;}},URL:{createObjectURL:value=>{createdObjects.push(value);return `blob:${Math.random()}`;},revokeObjectURL:url=>revoked.push(url)},createRenderer:()=>({setSource(value){sources.push(value);},setMaxSources(){}}),demoPanorama:()=>({}),formatTime:String,inspectFile:inspect|| (async()=>({nativeCandidate:true,tracks:[]})),createNativePlayer:create|| (async(file,options)=>{const player={file,options,playing:false,duration:20,audioState:{available:true,modes:['stereo','ambisonic'],mode:'stereo'},setAudioMode(mode){this.audioState.mode=mode;},setMuted(value){this.muted=value;},setVolume(value){this.volume=value;},play(){this.playing=true;return Promise.resolve();},pause(){this.playing=false;},seek(value){this.lastSeek=value;},close(){this.closed=true;}};players.push(player);return player;})});
+ const context=vm.createContext({resolvePlaylistSeek,readPlaylistSeekDuration:readDuration|| (async()=>20),createNextClipPreloader,shouldPreloadNext,prepareNextClip:prepare|| (async()=>null),installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:el,createElement:()=>({})},window:{addEventListener(name,fn){windowHandlers[name]=fn;}},URL:{createObjectURL:value=>{createdObjects.push(value);return `blob:${Math.random()}`;},revokeObjectURL:url=>revoked.push(url)},createRenderer:()=>({setSource(value){sources.push(value);},setMaxSources(){}}),demoPanorama:()=>({}),formatTime:String,inspectFile:inspect|| (async()=>({nativeCandidate:true,tracks:[]})),createNativePlayer:create|| (async(file,options)=>{const player={file,options,playing:false,duration:file.duration??20,audioState:{available:true,modes:['stereo','ambisonic'],mode:'stereo'},setAudioMode(mode){this.audioState.mode=mode;},setMuted(value){this.muted=value;},setVolume(value){this.volume=value;},play(){this.playing=true;return Promise.resolve();},pause(){this.playing=false;},seek(value){this.lastSeek=value;},close(){this.closed=true;}};players.push(player);return player;})});
  vm.runInContext(source,context);
  return {context,el,players,revoked,createdObjects,sources,windowHandlers};
 }
@@ -169,4 +170,130 @@ test('page visibility cancels ready input and suppresses new speculative request
  const values=[],h=setup({prepare:async()=>{const result=warmResult();values.push(result);return result;}});await h.context.setPlaylist(files);advancing(h.players[0]);await settlePreload();assert.equal(values.length,1);
  h.context.document.hidden=true;h.context.updateNextPreload();advancing(h.players[0],11);await settlePreload();assert.equal(values[0].closed,1);assert.equal(values.length,1);
  h.context.document.hidden=false;advancing(h.players[0],12);await settlePreload();assert.equal(values.length,2);
+});
+
+function position(h,time,playing=false){
+ const player=h.players.at(-1);player.playing=playing;
+ player.options.onState({playing,currentTime:time,duration:player.duration});
+}
+const gate=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
+test('relative native seeks carry overshoot both ways and retain paused/playing intent',async()=>{
+ for(const playing of [false,true]){
+  const h=setup();await h.context.setPlaylist(files);position(h,18,playing);
+  await h.context.seekRelative(5);assert.equal(h.players.at(-1).file,files[1]);assert.equal(h.players.at(-1).options.initialTime,3);assert.equal(h.players.at(-1).playing,playing);assert.equal(h.players[0].closed,true);
+  position(h,2,playing);await h.context.seekRelative(-5);
+  assert.equal(h.players.at(-1).file,files[0]);assert.equal(h.players.at(-1).options.initialTime,17);assert.equal(h.players.at(-1).playing,playing);
+ }
+});
+test('relative seeks follow the sorted queue, traverse multiple clips, and never wrap',async()=>{
+ const h=setup();await h.context.setPlaylist(files);h.context.sortPlaylist('size',true);position(h,2);
+ await h.context.seekRelative(-25);assert.equal(h.players.at(-1).file,files[2]);assert.equal(h.players.at(-1).options.initialTime,17);
+ await h.context.seekRelative(-1000);assert.equal(h.players.at(-1).file,files[2]);assert.equal(h.players.at(-1).lastSeek,0);
+ await h.context.seekRelative(1000);assert.equal(h.players.at(-1).file,files[0]);assert.equal(h.players.at(-1).lastSeek,20);
+});
+test('exact endpoints choose the next beginning but final endpoint stays paused',async()=>{
+ const h=setup();await h.context.setPlaylist(files);position(h,15);
+ await h.context.seekRelative(5);assert.equal(h.players.at(-1).file,files[1]);assert.equal(h.players.at(-1).options.initialTime,0);assert.equal(h.players.at(-1).playing,false);
+ position(h,5);await h.context.seekRelative(-5);assert.equal(h.players.at(-1).file,files[1]);assert.equal(h.players.at(-1).lastSeek,0);
+ await h.context.seekRelative(40);assert.equal(h.players.at(-1).file,files[2]);assert.equal(h.players.at(-1).lastSeek,20);assert.equal(h.players.at(-1).playing,false);
+});
+test('new relative input samples the live native clock after natural playback advances',async()=>{
+ const h=setup();await h.context.setPlaylist(files);position(h,1,true);
+ h.players[0].currentTime=18;await h.context.seekRelative(5);
+ assert.equal(h.players.at(-1).file,files[1]);assert.equal(h.players.at(-1).options.initialTime,3);
+ position(h,3,true);h.players.at(-1).currentTime=10;h.context.seekRelative(5);assert.equal(h.players.at(-1).lastSeek,15);
+});
+test('held input coalesces while duration is unknown, without competing decoder creation',async()=>{
+ const waiting=gate(),calls=[],h=setup({readDuration:async file=>{calls.push(file);await waiting.promise;return 20;}});
+ await h.context.setPlaylist(files);position(h,18,true);
+ const pending=h.context.seekRelative(5);await settlePreload();assert.equal(h.players.length,1);assert.equal(h.players[0].playing,false);
+ h.context.seekRelative(5);h.context.seekRelative(5);h.context.seekRelative(-5);
+ assert.equal(h.context.canSeekRelative(),true);waiting.resolve();await pending;
+ assert.equal(h.players.length,2);assert.equal(h.players.at(-1).file,files[1]);assert.equal(h.players.at(-1).options.initialTime,8);assert.equal(h.players.at(-1).playing,true);assert.equal(calls.length,1);
+});
+test('repeat and reversal during destination loading are applied before playback resumes',async()=>{
+ const waiting=gate(),h=setup({inspect:async file=>{if(file===files[1])await waiting.promise;return nativeInfo;}});
+ await h.context.setPlaylist(files);position(h,18,true);
+ const pending=h.context.seekRelative(5);await settlePreload();h.context.seekRelative(5);h.context.seekRelative(-15);waiting.resolve();await pending;
+ assert.equal(h.players.at(-1).file,files[0]);assert.equal(h.players.at(-1).options.initialTime,13);assert.equal(h.players.at(-1).playing,true);
+ assert.equal(h.players[1].playing,false,'intermediate destination must never autoplay');
+});
+test('play/pause during a pending seek controls only its final playback intent',async()=>{
+ const waiting=gate(),h=setup({readDuration:()=>waiting.promise});await h.context.setPlaylist(files);position(h,18,true);
+ const pending=h.context.seekRelative(5);await settlePreload();await h.context.togglePlayback();waiting.resolve(20);await pending;
+ assert.equal(h.players.at(-1).playing,false);
+});
+test('manual selection, sorting, replacement, absolute seeking and demo cancel stale duration work',async()=>{
+ for(const action of ['select','sort','replace','absolute','demo']){
+  const waiting=gate(),h=setup({readDuration:()=>waiting.promise});await h.context.setPlaylist(files);position(h,18);
+  const pending=h.context.seekRelative(5);await settlePreload();
+  if(action==='select')await h.context.selectClip(2,false);
+  if(action==='sort')h.context.sortPlaylist('size',true);
+  if(action==='replace')await h.context.setPlaylist([files[2]]);
+  if(action==='absolute'){h.el('seek').value=500;h.el('seek').emit('input');}
+  if(action==='demo')h.el('demo').emit('click');
+  const count=h.players.length,name=h.el('filename').textContent;waiting.resolve(20);await pending;
+  assert.equal(h.players.length,count,action);assert.equal(h.el('filename').textContent,name,action);
+  if(action==='absolute')assert.equal(h.players[0].lastSeek,10);
+ }
+});
+test('manual selection while seek destination opens rejects late readiness without autoplay',async()=>{
+ const waiting=gate(),h=setup({inspect:async file=>{if(file===files[1])await waiting.promise;return nativeInfo;}});
+ await h.context.setPlaylist(files);position(h,18,true);const pending=h.context.seekRelative(5);await settlePreload();
+ await h.context.selectClip(2,false);waiting.resolve();await pending;await flush();
+ assert.equal(h.players.at(-1).file,files[2]);assert.equal(h.players.at(-1).playing,false);assert.equal(h.players.length,2);
+});
+test('unknown duration failure preserves original position and playing state',async()=>{
+ const h=setup({readDuration:async()=>{throw Error('metadata unavailable');}});await h.context.setPlaylist(files);position(h,18,true);
+ await h.context.seekRelative(5);assert.equal(h.players.length,1);assert.equal(h.players[0].closed,undefined);assert.equal(h.players[0].playing,true);assert.match(h.el('status').textContent,/metadata unavailable.*original position/);
+});
+test('destination open failure restores the original clip and exact position',async()=>{
+ const h=setup({inspect:async file=>{if(file===files[1])throw Error('decoder failure');return nativeInfo;}});await h.context.setPlaylist(files);position(h,18,true);
+ await h.context.seekRelative(5);assert.equal(h.players.at(-1).file,files[0]);assert.equal(h.players.at(-1).options.initialTime,18);assert.equal(h.players.at(-1).playing,true);assert.match(h.el('status').textContent,/Seeking failed.*original position/);
+});
+test('queued natural EOF cannot override a newer relative seek',async()=>{
+ const h=setup();await h.context.setPlaylist(files);position(h,20);h.context.seekRelative(-5);await flush();
+ assert.equal(h.players.length,1);assert.equal(h.players[0].lastSeek,15);
+});
+test('paused seeks to the end never trigger native EOF auto-advance',async()=>{
+ const h=setup();await h.context.setPlaylist(files);position(h,18);const pending=h.context.seekRelative(25);await flush();await pending;
+ const last=h.players.at(-1);assert.equal(last.file,files[2]);assert.equal(last.playing,false);assert.equal(last.options.initialTime,3);
+});
+test('browser crossing keeps projection confirmation and applies overshoot before play',async()=>{
+ const info={tracks:[],videoTracks:[{}]},h=setup({inspect:async()=>info});await h.context.setPlaylist(files);
+ h.el('equirect').emit('click');const video=h.el('video');Object.assign(video,{currentTime:18,duration:20,readyState:2,videoWidth:200,videoHeight:100,paused:true});video.emit('loadeddata');await h.context.togglePlayback();
+ const pending=h.context.seekRelative(5);await settlePreload();assert.equal(h.el('equirect').hidden,false);assert.equal(video.paused,true);
+ h.el('equirect').emit('click');video.currentTime=0;video.emit('loadedmetadata');assert.equal(video.currentTime,3);video.readyState=2;video.emit('loadeddata');await pending;
+ assert.equal(video.currentTime,3);assert.equal(video.paused,false);
+});
+test('browser pending consent can be canceled by newer selection without later playback',async()=>{
+ const info={tracks:[],videoTracks:[{}]},h=setup({inspect:async()=>info});await h.context.setPlaylist(files);h.el('equirect').emit('click');const video=h.el('video');Object.assign(video,{currentTime:18,duration:20,readyState:2});video.emit('loadeddata');
+ const pending=h.context.seekRelative(5);await settlePreload();await h.context.selectClip(2,false);await pending;h.el('equirect').emit('click');video.readyState=2;video.emit('loadeddata');await flush();
+ assert.equal(h.el('filename').textContent,files[2].name);assert.equal(video.paused,true);
+});
+
+test('reversing away from pending browser consent does not require confirming the abandoned clip',async()=>{
+ const info={tracks:[],videoTracks:[{}]},h=setup({inspect:async()=>info});await h.context.setPlaylist(files);h.el('equirect').emit('click');const video=h.el('video');Object.assign(video,{currentTime:18,duration:20,readyState:2});video.emit('loadeddata');
+ const pending=h.context.seekRelative(5);await settlePreload();assert.equal(h.el('filename').textContent,files[1].name);assert.equal(h.el('equirect').hidden,false);
+ h.context.seekRelative(-10);await settlePreload();assert.equal(h.el('filename').textContent,files[0].name);assert.equal(h.el('equirect').hidden,true);
+ video.currentTime=0;video.emit('loadedmetadata');video.readyState=2;video.emit('loadeddata');await pending;assert.equal(video.currentTime,13);assert.equal(video.paused,true);
+});
+test('continued held input can skip past an unconfirmed browser destination without approving it',async()=>{
+ const info={tracks:[],videoTracks:[{}]},h=setup({inspect:async()=>info});await h.context.setPlaylist(files);h.el('equirect').emit('click');const video=h.el('video');Object.assign(video,{currentTime:18,duration:20,readyState:2});video.emit('loadeddata');
+ const pending=h.context.seekRelative(5);await settlePreload();h.context.seekRelative(20);await settlePreload();assert.equal(h.el('filename').textContent,files[2].name);assert.equal(h.el('equirect').hidden,false);
+ h.el('equirect').emit('click');video.currentTime=0;video.emit('loadedmetadata');video.readyState=2;video.emit('loadeddata');await pending;assert.equal(video.currentTime,3);assert.equal(video.paused,true);
+});
+
+test('reversal during inspection replans when the stale destination reaches projection consent',async()=>{
+ const info={tracks:[],videoTracks:[{}]},waiting=gate(),h=setup({inspect:async file=>{if(file===files[1])await waiting.promise;return info;}});await h.context.setPlaylist(files);h.el('equirect').emit('click');const video=h.el('video');Object.assign(video,{currentTime:18,duration:20,readyState:2});video.emit('loadeddata');
+ const pending=h.context.seekRelative(5);await settlePreload();h.context.seekRelative(-10);waiting.resolve();await settlePreload();
+ assert.equal(h.el('filename').textContent,files[0].name);assert.equal(h.el('equirect').hidden,true);
+ video.currentTime=0;video.emit('loadedmetadata');video.readyState=2;video.emit('loadeddata');await pending;assert.equal(video.currentTime,13);assert.equal(video.paused,true);
+});
+
+
+test('zero-duration current and intermediate entries cannot trap playlist seeking',async()=>{
+ const input=[{name:'zero.360',size:10,duration:0},{name:'empty.360',size:20,duration:0},{name:'last.360',size:30,duration:20}];
+ const h=setup({readDuration:async file=>file.duration});await h.context.setPlaylist(input);position(h,0);
+ await h.context.seekRelative(5);assert.equal(h.players.at(-1).file,input[2]);assert.equal(h.players.at(-1).options.initialTime,5);assert.equal(h.players.at(-1).playing,false);
 });

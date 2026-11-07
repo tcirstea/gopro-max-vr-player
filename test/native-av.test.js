@@ -78,3 +78,13 @@ test('native player forwards persistent volume independently of mute',async()=>{
   player.setMuted(false);assert.equal(player.getDiagnostics().audio.volume,.7);
  });
 });
+
+
+test('live native position samples the audio clock between render frames',async()=>{
+ await harness(async({player,videos,contexts,tick,settle})=>{
+  videos.forEach(v=>v.emit());await settle();tick(0);await player.play();await settle();tick(1);
+  contexts[0].currentTime=.08;
+  assert.ok(Math.abs(player.currentTime-.06)<1e-7);assert.equal(player.getDiagnostics().state.mediaClock,0);
+  player.pause();assert.ok(Math.abs(player.currentTime-.06)<1e-7);
+ });
+});

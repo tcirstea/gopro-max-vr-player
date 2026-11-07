@@ -4,7 +4,7 @@ import {createMaxStabilization} from './max-stabilization.js';
 // A codec can retain inputs internally after decodeQueueSize reaches zero. Do not
 // confuse these with queued decode requests, or a small output budget deadlocks it.
 const OUTPUT_BUFFER=6, MAX_IN_FLIGHT=24, DECODE_QUEUE=4, START_BUFFER=3;
-export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=()=>{},autoTick=true,preparedMovie=null}){
+export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=()=>{},autoTick=true,preparedMovie=null,initialTime=0}){
  if(!globalThis.isSecureContext||!globalThis.VideoDecoder){preparedMovie?.close();throw new Error('Native MAX playback needs WebCodecs in a secure context (HTTPS or localhost).');}
  const movie=preparedMovie||await demuxNative(file);
  const configs=movie.tracks.map(t=>({...t.config,hardwareAcceleration:'prefer-hardware',optimizeForLatency:true}));
@@ -86,9 +86,9 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
  }
  try{stabilization=await createMaxStabilization(file,movie.tracks[0].samples,(sample,index)=>movie.read(sample,movie.telemetry.inputIndex,index),movie.telemetry);
  audio=await createNativeAudio(movie,{onChange:notify});}catch(error){audio?.close();stabilization?.close();movie.close();throw error;}
- try{seek(0);}catch(error){closed=true;dispose();audio?.close();stabilization?.close();movie.close();throw error;}if(autoTick)raf=requestAnimationFrame(tick);
+ try{seek(initialTime);}catch(error){closed=true;dispose();audio?.close();stabilization?.close();movie.close();throw error;}if(autoTick)raf=requestAnimationFrame(tick);
  // The renderer can drive this from its active window/XR loop instead.
- return {advance:tick,duration:movie.duration,get playing(){return playing;},get audioState(){return audio.state;},play(){
+ return {advance:tick,duration:movie.duration,get currentTime(){return Math.min(movie.duration,Math.max(target,playing&&!buffering&&audio.available?audio.clock():mediaClock));},get playing(){return playing;},get audioState(){return audio.state;},play(){
   if(closed||failed||playing)return;
   const begin=()=>{if(currentTime>=movie.duration)seek(0);mediaClock=Math.max(target,currentTime);lastTick=null;playing=true;setBuffering(true);notify();};
   if(!audio.available){begin();return;}

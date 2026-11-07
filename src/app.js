@@ -1,3 +1,4 @@
+import {resolvePlaylistSeek,readPlaylistSeekDuration} from './playlist-seek.js';
 import {createNextClipPreloader,prepareNextClip,shouldPreloadNext} from './next-clip-preload.js';
 import {installKeyboardControls} from './keyboard-controls.js';
 import {createNativePlayer} from './native-player.js';
@@ -36,6 +37,21 @@ function applyNativePreferences(player){
 let renderer,objectURL=null,generation=0,pendingFile=null,pendingBlob=null,nativePlayer=null,nativeTime=0,nativeAdvancing=false;
 let playlist=[],playlistIndex=-1,playWhenReady=false,playlistEpoch=0,playlistVersion=0,playlistSort='added',playlistDescending=false;
 let previewAbort=null,previewRunning=false,mediaOpening=false,pendingPlayback=0;
+let relativeSeek=null,transportRevision=0,mediaReadyCallback=null,mediaStartTime=null;
+const seekDurations=new WeakMap();
+function completeMediaReady(ready){const callback=mediaReadyCallback;mediaReadyCallback=null;callback?.(ready);}
+function currentPlaybackTime(){return nativePlayer?(nativePlayer.currentTime??nativeTime):video.currentTime;}
+function canSeekRelative(){return !!relativeSeek||!$('seek').disabled;}
+function cancelRelativeSeek(restore=false){
+ const job=relativeSeek;if(!job)return;
+ relativeSeek=null;job.abort.abort();completeMediaReady(false);playbackStatus('');if($('seek').disabled)$('play').disabled=true;
+ if(restore){playWhenReady=job.playing;const current=generation;Promise.resolve().then(()=>{if(current===generation&&!relativeSeek&&!mediaOpening&&!$('play').disabled)resumeWhenReady(current);});}
+}
+function applySeek(target){
+ transportRevision++;cancelPreloadForSeek(target);
+ if(nativePlayer){nativePlayer.seek(target);nativeTime=target;}else video.currentTime=target;
+}
+
 const confirmedProjection=new WeakSet();
 const nextClipPreload=createNextClipPreloader({prepare:prepareNextClip});
 let preloadResumeAfter=null,latestPlayback=null;
@@ -43,7 +59,7 @@ function updateNextPreload(state=latestPlayback){
  latestPlayback=state;
  if(preloadResumeAfter!==null&&state?.playing&&!state.buffering&&!state.preparing&&state.currentTime>=preloadResumeAfter)preloadResumeAfter=null;
  const next=playlist[playlistIndex+1];
- if(preloadResumeAfter===null&&!document.hidden&&!mediaOpening&&next&&state&&shouldPreloadNext(state))nextClipPreload.consider(next.id,next.file,{confirmed:confirmedProjection.has(next.file)});
+ if(!relativeSeek&&preloadResumeAfter===null&&!document.hidden&&!mediaOpening&&next&&state&&shouldPreloadNext(state))nextClipPreload.consider(next.id,next.file,{confirmed:confirmedProjection.has(next.file)});
  else nextClipPreload.cancel();
 }
 function cancelPreloadForSeek(target){preloadResumeAfter=Number.isFinite(target)?target+.25:Infinity;nextClipPreload.cancel();}
@@ -52,7 +68,7 @@ const playlistBrowser=createPlaylistBrowser({getState:playlistState,onSelect:sel
 function stopPreview(){previewAbort?.abort();}
 function isPlaying(){return !!(nativePlayer?.playing||(!video.paused&&objectURL));}
 function schedulePreviews(){
- if(previewRunning||mediaOpening||pendingPlayback>0||isPlaying()||!playlist.length)return;
+ if(relativeSeek||previewRunning||mediaOpening||pendingPlayback>0||isPlaying()||!playlist.length)return;
  const epoch=playlistEpoch;
  previewRunning=true;previewAbort=new AbortController();const signal=previewAbort.signal;
  (async()=>{
@@ -77,6 +93,7 @@ async function enrichPlaylist(epoch){
 }
 function sortPlaylist(key,descending=playlistDescending){
  if(!PLAYLIST_SORTS.includes(key))return;
+ cancelRelativeSeek(true);transportRevision++;
  const selected=playlist[playlistIndex]?.id;playlistSort=key;playlistDescending=!!descending;
  playlist=sortPlaylistEntries(playlist,key,playlistDescending);
  playlistIndex=playlist.findIndex(item=>item.id===selected);playlistVersion++;syncPlaylist();updateNextPreload();
@@ -96,21 +113,23 @@ function syncPlaylist(){
 }
 function setPlaylist(files){
  if(!files.length)return;
- stopPreview();playlistEpoch++;playlistVersion++;playlist=createPlaylistEntries(files,playlistEpoch);playlistIndex=-1;
+ cancelRelativeSeek();stopPreview();playlistEpoch++;playlistVersion++;playlist=createPlaylistEntries(files,playlistEpoch);playlistIndex=-1;
  playlist=sortPlaylistEntries(playlist,playlistSort,playlistDescending);
  const opened=selectClip(0,false);enrichPlaylist(playlistEpoch);return opened;
 }
-function selectClip(index,autoplay=nativePlayer?.playing||(!video.paused&&!!objectURL)||playWhenReady,automatic=false){
+function selectClip(index,autoplay=relativeSeek?.playing||nativePlayer?.playing||(!video.paused&&!!objectURL)||playWhenReady,automatic=false,seekOptions=null){
  if(!Number.isInteger(index)||index<0||index>=playlist.length)return;
+ if(!seekOptions)cancelRelativeSeek();transportRevision++;
  const item=playlist[index],prepared=automatic?nextClipPreload.take(item.id,item.file):null;
  if(!automatic)nextClipPreload.cancel();
  playlistIndex=index;playWhenReady=!!autoplay;syncPlaylist();
- return openFile(item.file,{prepared,preserveFrame:automatic});
+ return openFile(item.file,{prepared,preserveFrame:automatic||!!seekOptions,...seekOptions});
 }
 function advancePlaylist(current){
  // Run outside a decoder callback: closing its player synchronously would
  // otherwise invalidate the frames that the callback is still presenting.
- Promise.resolve().then(()=>{if(current===generation&&playlistIndex>=0&&playlistIndex<playlist.length-1)selectClip(playlistIndex+1,true,true);});
+ const revision=transportRevision;
+ Promise.resolve().then(()=>{if(!relativeSeek&&revision===transportRevision&&current===generation&&playlistIndex>=0&&playlistIndex<playlist.length-1)selectClip(playlistIndex+1,true,true);});
 }
 async function resumeWhenReady(current){
  if(!playWhenReady||current!==generation)return;
@@ -143,10 +162,10 @@ $('canvas').addEventListener('xrmirrorerror',event=>status(event.detail));
 // Read live transport state each XR frame; buffering must not consume the
 // panel's two seconds of actual playback. The provider also works in demo mode.
 renderer?.onXRPanelState?.(()=>({
- mediaId:generation,playing:nativePlayer?nativePlayer.playing:!!objectURL&&!video.paused&&!video.ended,
- advancing:nativePlayer?nativeAdvancing:!!objectURL&&!video.paused&&!video.ended&&!video.seeking&&video.readyState>=3,
+ mediaId:generation,playing:relativeSeek?relativeSeek.playing:nativePlayer?nativePlayer.playing:!!objectURL&&!video.paused&&!video.ended,
+ advancing:!relativeSeek&&(nativePlayer?nativeAdvancing:!!objectURL&&!video.paused&&!video.ended&&!video.seeking&&video.readyState>=3),
  currentTime:nativePlayer?nativeTime:video.currentTime,duration:nativePlayer?nativePlayer.duration:video.duration,
- canPlay:!$('play').disabled,canSeek:!$('seek').disabled,canMute:!$('muted').disabled,muted:preferences.muted,
+ canPlay:!!relativeSeek||!$('play').disabled,canSeek:!$('seek').disabled,canMute:!$('muted').disabled,muted:preferences.muted,
  canPrevious:!$('previous').disabled,canNext:!$('next').disabled,playlist:playlistState()
 }));
 $('canvas').addEventListener('xrpanelaction',event=>{
@@ -162,14 +181,15 @@ $('canvas').addEventListener('xrpanelaction',event=>{
   const duration=nativePlayer?nativePlayer.duration:video.duration;
   if(!Number.isFinite(duration)||duration<=0)return;
   const target=Math.max(0,Math.min(1,value))*duration;
-  try{cancelPreloadForSeek(target);if(nativePlayer){nativePlayer.seek(target);nativeTime=target;}else video.currentTime=target;}
+  try{cancelRelativeSeek(true);applySeek(target);}
   catch(error){status(`Seeking failed: ${error.message}`);}
  }
 });
 const hasHEVC=video.canPlayType('video/mp4; codecs="hvc1.1.6.L153.B0"');
 $('capabilities').textContent=`This browser: WebGL ${renderer?'available':'unavailable'} · WebCodecs ${'VideoDecoder' in window?'available':'unavailable'} · HEVC media hint: ${hasHEVC||'not reported'}. These hints do not validate native MAX playback.`;
-function clearMedia({preserveFrame=false}={}){nativeTime=0;nativeAdvancing=false;nativePlayer?.close();nativePlayer=null;$('diagnostics-panel').hidden=true;playbackStatus('');$('play').textContent='Play';$('muted').disabled=false;syncAudioMode();syncAudioPreferences();video.pause();video.removeAttribute('src');video.load();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=null;pendingFile=null;pendingBlob=null;$('play').disabled=true;$('seek').disabled=true;$('seek').value=0;$('time').textContent='0:00 / 0:00';$('equirect').hidden=true;if(!preserveFrame){renderer?.setSource(demoPanorama());$('source').textContent='DEMO PANORAMA';$('view-title').textContent='Take a look around';}}
-async function openFile(file,{prepared=null,preserveFrame=false}={}){
+function clearMedia({preserveFrame=false}={}){nativeTime=0;nativeAdvancing=false;nativePlayer?.close();nativePlayer=null;$('diagnostics-panel').hidden=true;playbackStatus('');$('play').textContent=relativeSeek?.playing?'Pause':'Play';$('muted').disabled=false;syncAudioMode();syncAudioPreferences();video.pause();video.removeAttribute('src');video.load();if(objectURL)URL.revokeObjectURL(objectURL);objectURL=null;pendingFile=null;pendingBlob=null;$('play').disabled=!relativeSeek;$('seek').disabled=true;$('seek').value=0;$('time').textContent='0:00 / 0:00';$('equirect').hidden=true;if(!preserveFrame){renderer?.setSource(demoPanorama());$('source').textContent='DEMO PANORAMA';$('view-title').textContent='Take a look around';}}
+async function openFile(file,{prepared=null,preserveFrame=false,initialTime=null,onReady=null,onConsent=null}={}){
+ completeMediaReady(false);mediaStartTime=initialTime;mediaReadyCallback=onReady;
  nextClipPreload.cancel();preloadResumeAfter=null;latestPlayback=null;stopPreview();mediaOpening=true;pendingPlayback=0;const current=++generation;let ended=false;clearMedia({preserveFrame});$('filename').textContent=file.name;$('metadata').textContent='';status('Inspecting local container metadata…');
  try{const info=prepared?.info||await inspectFile(file);if(current!==generation)return;
  $('metadata').textContent=`${(file.size/1024/1024).toFixed(1)} MiB · Container brand: ${info.brand||'unknown'}\n`+info.tracks.map((t,i)=>`Track ${i+1}: ${t.type} / ${t.codec}${t.width?` / ${t.width} × ${t.height}`:''}`).join('\n');
@@ -177,17 +197,17 @@ async function openFile(file,{prepared=null,preserveFrame=false}={}){
   if(!renderer)throw new Error('WebGL is required for native playback.');
   status('Native dual-track candidate detected. Checking HEVC decoders and loading paired frames locally…');
   const preparedMovie=prepared?.movie;prepared=null;
-  const player=await createNativePlayer(file,{autoTick:false,preparedMovie,
+  const player=await createNativePlayer(file,{autoTick:false,preparedMovie,initialTime:initialTime??0,
    onFrames(a,b,options){if(current!==generation)return;renderer.setMaxSources(a,b,options);$('source').textContent='LOCAL MAX · EXPERIMENTAL EAC';$('view-title').textContent='Your point of view';},
-   onState(state){if(current!==generation)return;nativeTime=state.currentTime;nativeAdvancing=state.playing&&!state.buffering&&!state.preparing;playbackStatus(state.preparing?(state.inputStrategy==='chunked-prefetch'?'Preparing 64 MiB playback buffers in local memory…':'Preparing this short clip in local memory…'):state.buffering?'Buffering paired video frames… Playback time is held until frames are ready.':state.playing?`Playing locally · ${state.audio?.available?(state.audio.mode==='ambisonic'?'Head-relative ambisonic headphones':state.audio.mode+' audio'):'Audio unavailable on this browser'}.`:'');$('play').textContent=state.playing?'Pause':'Play';if(state.playing)stopPreview();else schedulePreviews();if(state.currentTime<state.duration)updateNextPreload(state);$('time').textContent=`${formatTime(state.currentTime)} / ${formatTime(state.duration)}`;$('seek').value=state.currentTime/state.duration*1000;if(state.audio){$('muted').disabled=!state.audio.available;syncAudioMode(state.audio);}if(!state.playing&&state.duration>0&&state.currentTime>=state.duration&&!ended){ended=true;advancePlaylist(current);}},
-   onError(error){if(current===generation){playbackStatus('');$('play').disabled=true;$('seek').disabled=true;playWhenReady=false;latestPlayback=null;nextClipPreload.cancel();status(`Native decoder stopped: ${error.message}. Use Next to skip this clip.`);}}
+   onState(state){if(current!==generation)return;nativeTime=state.currentTime;nativeAdvancing=state.playing&&!state.buffering&&!state.preparing;playbackStatus(relativeSeek?'Seeking across the playlist…':state.preparing?(state.inputStrategy==='chunked-prefetch'?'Preparing 64 MiB playback buffers in local memory…':'Preparing this short clip in local memory…'):state.buffering?'Buffering paired video frames… Playback time is held until frames are ready.':state.playing?`Playing locally · ${state.audio?.available?(state.audio.mode==='ambisonic'?'Head-relative ambisonic headphones':state.audio.mode+' audio'):'Audio unavailable on this browser'}.`:'');$('play').textContent=(relativeSeek?relativeSeek.playing:state.playing)?'Pause':'Play';if(state.playing)stopPreview();else schedulePreviews();if(state.currentTime<state.duration)updateNextPreload(state);$('time').textContent=`${formatTime(state.currentTime)} / ${formatTime(state.duration)}`;$('seek').value=state.currentTime/state.duration*1000;if(state.audio){$('muted').disabled=!state.audio.available;syncAudioMode(state.audio);}if(state.currentTime<state.duration)ended=false;if(!relativeSeek&&!state.playing&&state.duration>0&&state.currentTime>=state.duration&&!ended){ended=true;advancePlaylist(current);}},
+   onError(error){if(current===generation){completeMediaReady(false);playbackStatus('');$('play').disabled=true;$('seek').disabled=true;playWhenReady=false;latestPlayback=null;nextClipPreload.cancel();status(`Native decoder stopped: ${error.message}. Use Next to skip this clip.`);}}
   });
-  if(current!==generation){player.close();return;}nativePlayer=player;$('diagnostics-panel').hidden=false;$('play').disabled=false;$('seek').disabled=false;applyNativePreferences(player);$('muted').disabled=!player.audioState?.available;syncAudioMode(player.audioState);
-  status('Experimental native MAX pipeline opened locally. Press Play. Dual HEVC frames are mapped as EAC; overlap blending is included; native audio is synchronized when supported. Your audio preferences are retained; headphone mode uses verified spatial metadata. Optical-flow seam correction is not implemented. Codec support does not guarantee real-time playback.'+(player.audioState?.available&&!player.audioState.modes.includes(preferences.audioMode)?` Preferred ${preferences.audioMode} audio is unavailable in this clip; using ${player.audioState.mode}. Your preference is kept for the next compatible clip.`:''));await resumeWhenReady(current);return;
+  if(current!==generation){player.close();return;}nativePlayer=player;seekDurations.set(file,player.duration);$('diagnostics-panel').hidden=false;$('play').disabled=false;$('seek').disabled=false;applyNativePreferences(player);$('muted').disabled=!player.audioState?.available;syncAudioMode(player.audioState);
+  status('Experimental native MAX pipeline opened locally. Press Play. Dual HEVC frames are mapped as EAC; overlap blending is included; native audio is synchronized when supported. Your audio preferences are retained; headphone mode uses verified spatial metadata. Optical-flow seam correction is not implemented. Codec support does not guarantee real-time playback.'+(player.audioState?.available&&!player.audioState.modes.includes(preferences.audioMode)?` Preferred ${preferences.audioMode} audio is unavailable in this clip; using ${player.audioState.mode}. Your preference is kept for the next compatible clip.`:''));completeMediaReady(true);await resumeWhenReady(current);return;
  }
- if(!info.videoTracks.length){playWhenReady=false;status('No video track found in this container. Use Next to skip this clip.');return;}
- pendingFile=file;pendingBlob=prepared?.blob||null;if(confirmedProjection.has(file)){loadEquirectangular();return;}$('equirect').hidden=false;status('Container inspected. If this is an already-stitched equirectangular (2:1) video, choose “View as equirectangular video”. Ordinary flat videos will appear distorted. Browser codec support is checked when loading.');
- }catch(error){if(current===generation){playWhenReady=false;status(`Cannot open this file: ${error.message}. Use Next to skip this clip.`);}}
+ if(!info.videoTracks.length){completeMediaReady(false);playWhenReady=false;status('No video track found in this container. Use Next to skip this clip.');return;}
+ pendingFile=file;pendingBlob=prepared?.blob||null;if(confirmedProjection.has(file)){loadEquirectangular();return;}$('equirect').hidden=false;status('Container inspected. If this is an already-stitched equirectangular (2:1) video, choose “View as equirectangular video”. Ordinary flat videos will appear distorted. Browser codec support is checked when loading.');onConsent?.();
+ }catch(error){if(current===generation){completeMediaReady(false);playWhenReady=false;status(`Cannot open this file: ${error.message}. Use Next to skip this clip.`);}}
  finally{prepared?.close();if(current===generation){mediaOpening=false;schedulePreviews();if(latestPlayback)updateNextPreload();}}
 }
 $('download-diagnostics').addEventListener('click',()=>{
@@ -203,31 +223,88 @@ $('download-diagnostics').addEventListener('click',()=>{
 $('file').addEventListener('change',e=>{setPlaylist(e.target.files);e.target.value='';});
 function loadEquirectangular(){if(!pendingFile||!renderer)return;confirmedProjection.add(pendingFile);$('equirect').hidden=true;objectURL=URL.createObjectURL(pendingBlob||pendingFile);pendingBlob=null;video.src=objectURL;video.load();status('Loading local video with the browser decoder…');}
 $('equirect').addEventListener('click',loadEquirectangular);
-video.addEventListener('loadeddata',()=>{if(!objectURL||video.readyState<2)return;renderer?.setSource(video);$('source').textContent='LOCAL EQUIRECTANGULAR VIDEO';$('view-title').textContent='Your point of view';$('play').disabled=false;$('seek').disabled=false;status(`Video decoded locally: ${video.videoWidth} × ${video.videoHeight}. Press Play to explore.${Math.abs(video.videoWidth/video.videoHeight-2)>.05?' Warning: this is not a 2:1 frame; verify its projection.':''}`);resumeWhenReady(generation);});
-video.addEventListener('error',()=>{if(objectURL&&video.error){playWhenReady=false;latestPlayback=null;nextClipPreload.cancel();$('play').disabled=true;$('seek').disabled=true;status('This browser could not decode this video. HEVC support depends on your browser, OS, and hardware. Use Next to skip this clip. No transcoding or upload was attempted.');}});
-async function togglePlayback(){if($('play').disabled)return;const current=generation;pendingPlayback++;stopPreview();try{if(nativePlayer){if(nativePlayer.playing)nativePlayer.pause();else await nativePlayer.play();}else if(video.paused)await video.play();else video.pause();}catch(error){if(current===generation)status(`Playback blocked: ${error.message}`);}finally{if(current===generation){pendingPlayback--;schedulePreviews();}}}
+function applyMediaStart(){if(mediaStartTime!==null&&Number.isFinite(video.duration)){video.currentTime=Math.max(0,Math.min(video.duration,mediaStartTime));mediaStartTime=null;}}
+video.addEventListener('loadedmetadata',()=>{if(objectURL){try{applyMediaStart();}catch(error){completeMediaReady(false);status(`Seeking failed: ${error.message}`);}}});
+video.addEventListener('loadeddata',()=>{if(!objectURL||video.readyState<2||(video.currentSrc&&video.currentSrc!==objectURL))return;try{applyMediaStart();}catch(error){completeMediaReady(false);status(`Seeking failed: ${error.message}`);return;}if(pendingFile&&Number.isFinite(video.duration))seekDurations.set(pendingFile,video.duration);renderer?.setSource(video);$('source').textContent='LOCAL EQUIRECTANGULAR VIDEO';$('view-title').textContent='Your point of view';$('play').disabled=false;$('seek').disabled=false;status(`Video decoded locally: ${video.videoWidth} × ${video.videoHeight}. Press Play to explore.${Math.abs(video.videoWidth/video.videoHeight-2)>.05?' Warning: this is not a 2:1 frame; verify its projection.':''}`);completeMediaReady(true);resumeWhenReady(generation);});
+video.addEventListener('error',()=>{if(objectURL&&video.error){completeMediaReady(false);playWhenReady=false;latestPlayback=null;nextClipPreload.cancel();$('play').disabled=true;$('seek').disabled=true;status('This browser could not decode this video. HEVC support depends on your browser, OS, and hardware. Use Next to skip this clip. No transcoding or upload was attempted.');}});
+async function togglePlayback(){if(relativeSeek){relativeSeek.playing=!relativeSeek.playing;$('play').textContent=relativeSeek.playing?'Pause':'Play';return;}if($('play').disabled)return;const current=generation;pendingPlayback++;stopPreview();try{if(nativePlayer){if(nativePlayer.playing)nativePlayer.pause();else await nativePlayer.play();}else if(video.paused)await video.play();else video.pause();}catch(error){if(current===generation)status(`Playback blocked: ${error.message}`);}finally{if(current===generation){pendingPlayback--;schedulePreviews();}}}
 $('play').addEventListener('click',togglePlayback);
 $('canvas').addEventListener('xrtoggleplay',togglePlayback);
 $('canvas').addEventListener('xrseek',event=>seekRelative(event.detail));
 installKeyboardControls({target:window,document,togglePlayback,seek:seekRelative,
- canPlay:()=>!$('play').disabled,canSeek:()=>!$('seek').disabled,
+ canPlay:()=>!!relativeSeek||!$('play').disabled,canSeek:canSeekRelative,
  revealControls:()=>$('viewer').classList?.remove('controls-hidden')
 });
 function seekRelative(seconds){
- if($('seek').disabled||!Number.isFinite(seconds))return;
- try{const duration=nativePlayer?nativePlayer.duration:video.duration;
-  if(!Number.isFinite(duration)||duration<=0)return;
-  const target=Math.max(0,Math.min(duration,(nativePlayer?nativeTime:video.currentTime)+seconds));
-  cancelPreloadForSeek(target);if(nativePlayer){nativePlayer.seek(target);nativeTime=target;}else video.currentTime=target;
+ if(!canSeekRelative()||!Number.isFinite(seconds)||seconds===0)return;
+ if(relativeSeek){relativeSeek.delta+=seconds;relativeSeek.revision++;if(pendingFile&&!objectURL&&!$('equirect').hidden)relativeSeek.wake?.();return relativeSeek.promise;}
+ try{
+  const duration=nativePlayer?nativePlayer.duration:video.duration,time=currentPlaybackTime();
+  if(!Number.isFinite(duration)||duration<0||!Number.isFinite(time))return;
+  const target=time+seconds;
+  if(playlistIndex<0||(target>=0&&(target<duration||playlistIndex===playlist.length-1))||(target<0&&playlistIndex===0)){
+   applySeek(Math.max(0,Math.min(duration,target)));return;
+  }
+  const job={items:playlist.slice(),index:playlistIndex,time,delta:seconds,revision:0,playing:isPlaying()||playWhenReady||pendingPlayback>0,abort:new AbortController()};
+  seekDurations.set(job.items[job.index].file,duration);relativeSeek=job;transportRevision++;playWhenReady=false;
+  cancelPreloadForSeek();stopPreview();if(nativePlayer)nativePlayer.pause();else video.pause();
+  $('play').textContent=job.playing?'Pause':'Play';status('Seeking across the playlist… Reading local clip durations.');
+  job.promise=runRelativeSeek(job);return job.promise;
  }catch(error){status(`Seeking failed: ${error.message}`);}
 }
-for(const name of ['play','pause','ended'])video.addEventListener(name,()=>{if(name==='play')stopPreview();else schedulePreviews();if(name==='pause'&&!video.ended&&!nativePlayer){nextClipPreload.cancel();if(latestPlayback)latestPlayback={...latestPlayback,playing:false};}if(objectURL&&!nativePlayer)$('play').textContent=video.paused?'Play':'Pause';});
+async function runRelativeSeek(job){
+ const active=()=>relativeSeek===job&&!job.abort.signal.aborted;
+ const durationFor=async item=>{
+  if(!seekDurations.has(item.file))seekDurations.set(item.file,await readPlaylistSeekDuration(item.file,{signal:job.abort.signal}));
+  return seekDurations.get(item.file);
+ };
+ const openTarget=(index,time)=>new Promise(resolve=>{
+  let finished=false;const revision=job.revision;
+  const done=value=>{if(finished)return;finished=true;job.wake=null;resolve(value);};
+  // Projection consent is user-paced, not decoder work. A reversal must be
+  // able to leave that unconfirmed destination without approving its format.
+  job.wake=()=>{mediaReadyCallback=null;done('replan');};
+  selectClip(index,false,false,{initialTime:time,onReady:done,onConsent:()=>{if(active()&&revision!==job.revision)job.wake?.();}});
+ });
+ try{
+  while(active()){
+   const revision=job.revision;
+   const target=await resolvePlaylistSeek(job.items,job.index,job.time+job.delta,{getDuration:durationFor,signal:job.abort.signal});
+   if(!active())return;if(revision!==job.revision)continue;
+   if(playlist[playlistIndex]?.id!==job.items[target.index].id||$('seek').disabled){
+    const opened=await openTarget(target.index,target.time);if(opened==='replan')continue;
+    if(!opened){if(active())throw new Error('The destination clip could not be opened.');return;}
+    if(!active())return;
+    // Duration from the opened decoder is authoritative. Re-resolve if it
+    // differs or more held-stick/key input arrived while the file opened.
+    if(revision!==job.revision||seekDurations.get(job.items[target.index].file)!==target.duration)continue;
+   }
+   if(Math.abs(currentPlaybackTime()-target.time)>.000001)applySeek(target.time);
+   else cancelPreloadForSeek(target.time);
+   relativeSeek=null;playWhenReady=job.playing;playbackStatus('');status(`Seeked to ${formatTime(target.time)} in clip ${target.index+1} of ${job.items.length}.`);
+   await resumeWhenReady(generation);schedulePreviews();return;
+  }
+ }catch(error){
+  if(!active())return;
+  // A failed duration read never leaves the current video. If opening the
+  // destination fails, try to return to the original position instead.
+  if(playlist[playlistIndex]?.id!==job.items[job.index].id){
+   const restored=await openTarget(job.index,job.time);if(!active())return;
+   if(!restored){relativeSeek=null;playWhenReady=false;status(`Seeking failed: ${error.message} Use Previous or Next to choose a playable clip.`);return;}
+  }
+  if(!active())return;relativeSeek=null;playWhenReady=job.playing;const current=generation;
+  await resumeWhenReady(current);
+  if(current===generation&&!relativeSeek)status(`Seeking failed: ${error.message} Kept the original position; use Previous or Next to choose a clip.`);
+  schedulePreviews();
+ }
+}
+for(const name of ['play','pause','ended'])video.addEventListener(name,()=>{if(name==='play')stopPreview();else schedulePreviews();if(name==='pause'&&!video.ended&&!nativePlayer){nextClipPreload.cancel();if(latestPlayback)latestPlayback={...latestPlayback,playing:false};}if(objectURL&&!nativePlayer)$('play').textContent=(relativeSeek?relativeSeek.playing:!video.paused)?'Pause':'Play';});
 video.addEventListener('seeking',()=>{if(objectURL&&!nativePlayer)cancelPreloadForSeek(video.currentTime);});
 for(const name of ['waiting','stalled'])video.addEventListener(name,()=>{if(objectURL&&!nativePlayer){nextClipPreload.cancel();if(latestPlayback)latestPlayback={...latestPlayback,buffering:true};}});
 document.addEventListener?.('visibilitychange',()=>{if(document.hidden)nextClipPreload.cancel();else updateNextPreload();});
 video.addEventListener('ended',()=>{if(objectURL&&!nativePlayer&&video.ended)advancePlaylist(generation);});
 video.addEventListener('timeupdate',()=>{if(!objectURL||nativePlayer)return;if(!video.ended)updateNextPreload({playing:!video.paused,buffering:video.readyState<3||video.seeking,currentTime:video.currentTime,duration:video.duration});$('time').textContent=`${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;$('seek').value=Number.isFinite(video.duration)&&video.duration>0?video.currentTime/video.duration*1000:0;});
-$('seek').addEventListener('input',()=>{try{const duration=nativePlayer?nativePlayer.duration:video.duration;if(!Number.isFinite(duration))return;const target=$('seek').value/1000*duration;cancelPreloadForSeek(target);if(nativePlayer)nativePlayer.seek(target);else video.currentTime=target;}catch(error){status(`Seeking failed: ${error.message}`);}});video.addEventListener('seeked',()=>renderer?.refresh());
+$('seek').addEventListener('input',()=>{try{cancelRelativeSeek(true);const duration=nativePlayer?nativePlayer.duration:video.duration;if(!Number.isFinite(duration))return;const target=$('seek').value/1000*duration;applySeek(target);}catch(error){status(`Seeking failed: ${error.message}`);}});video.addEventListener('seeked',()=>renderer?.refresh());
 $('muted').addEventListener('change',()=>{preferences.muted=$('muted').checked;syncAudioPreferences();});
 $('volume').addEventListener('input',()=>{const value=Number($('volume').value);if(Number.isFinite(value)){preferences.volume=Math.max(0,Math.min(1,value));syncAudioPreferences();}});
 $('audio-mode').addEventListener('change',()=>{const mode=$('audio-mode').value;if(!['stereo','ambisonic'].includes(mode))return;preferences.audioMode=mode;if(nativePlayer?.audioState?.modes.includes(mode))nativePlayer.setAudioMode(mode);syncAudioMode();});
@@ -243,10 +320,10 @@ $('double-height-rows').addEventListener('change',()=>{
  playlistVersion++;playlistBrowser.render();
 });
 syncAudioMode();
-$('demo').addEventListener('click',()=>{nextClipPreload.cancel();latestPlayback=null;++generation;stopPreview();playlistEpoch++;playlistVersion++;playlist=[];playlistIndex=-1;playWhenReady=false;mediaOpening=false;pendingPlayback=0;playlistBrowser.close();$('viewer').classList?.remove('controls-hidden');syncPlaylist();$('playlist-select').replaceChildren();clearMedia();$('filename').textContent='Generated demo panorama';$('metadata').textContent='';status('This is a synthetic panorama for testing navigation—not GoPro footage.');});
+$('demo').addEventListener('click',()=>{cancelRelativeSeek();completeMediaReady(false);nextClipPreload.cancel();latestPlayback=null;++generation;stopPreview();playlistEpoch++;playlistVersion++;playlist=[];playlistIndex=-1;playWhenReady=false;mediaOpening=false;pendingPlayback=0;playlistBrowser.close();$('viewer').classList?.remove('controls-hidden');syncPlaylist();$('playlist-select').replaceChildren();clearMedia();$('filename').textContent='Generated demo panorama';$('metadata').textContent='';status('This is a synthetic panorama for testing navigation—not GoPro footage.');});
 $('reset').addEventListener('click',()=>renderer?.reset());
 $('fullscreen').addEventListener('click',async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await $('viewer').requestFullscreen();}catch{status('Full screen is unavailable in this browser or embedded context.');}});
-$('canvas').addEventListener('webglcontextlost',e=>{e.preventDefault();nextClipPreload.cancel();nativePlayer?.pause();video.pause();status('Graphics context lost. Reload this page to restore the viewer.');});
+$('canvas').addEventListener('webglcontextlost',e=>{e.preventDefault();cancelRelativeSeek();playWhenReady=false;nextClipPreload.cancel();nativePlayer?.pause();video.pause();status('Graphics context lost. Reload this page to restore the viewer.');});
 $('canvas').addEventListener('xrerror',e=>status(`VR unavailable: ${e.detail} Close any existing immersive session in your headset or another tab, then try Enter VR again. Desktop playback is still available.`));
 $('canvas').addEventListener('rendererror',e=>status(`Video texture unavailable: ${e.detail}`));
-window.addEventListener('pagehide',()=>{nextClipPreload.close();stopPreview();playlistEpoch++;playlist=[];++generation;playWhenReady=false;nativePlayer?.close();if(objectURL)URL.revokeObjectURL(objectURL);});
+window.addEventListener('pagehide',()=>{cancelRelativeSeek();completeMediaReady(false);nextClipPreload.close();stopPreview();playlistEpoch++;playlist=[];++generation;playWhenReady=false;nativePlayer?.close();if(objectURL)URL.revokeObjectURL(objectURL);});
