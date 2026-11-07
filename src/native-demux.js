@@ -37,17 +37,25 @@ export const SMALL_FILE_PRELOAD_BYTES=64*1024*1024;
 export function createMovieInput(file,tracks=[]){
  if(file.size>SMALL_FILE_PRELOAD_BYTES){
   const input=createChunkedInput(file,{tracks});
-  return {read:(...args)=>input.read(...args),reset:()=>input.reset(),close:()=>input.close(),getReadDiagnostics:()=>[input.getDiagnostics()],getInputState:()=>({...input.getInputState(),preloadLimitBytes:SMALL_FILE_PRELOAD_BYTES})};
+  // A one-byte demand warms just the first video chunk. No sample-table
+  // lookahead or second chunk is requested until the movie is promoted.
+  return {prepare:()=>input.read({offset:tracks[0]?.samples[0]?.offset||0,size:1},0,0,false).then(()=>{}),read:(...args)=>input.read(...args),reset:()=>input.reset(),close:()=>input.close(),getReadDiagnostics:()=>[input.getDiagnostics()],getInputState:()=>({...input.getInputState(),preloadLimitBytes:SMALL_FILE_PRELOAD_BYTES})};
  }
  const reader=createSampleReader(file,SMALL_FILE_PRELOAD_BYTES);
  let preparation=null,ready=false,closed=false;
+ async function prepare(){
+  if(closed)throw new Error('Local video input is closed.');
+  preparation??=reader.read({offset:0,size:1}).then(()=>{if(!closed)ready=true;});
+  await preparation;
+  if(closed)throw new Error('Local video input is closed.');
+ }
  return {
+  prepare,
   async read(sample){
    if(closed)throw new Error('Local video input is closed.');
    // The one-byte sample asks the reader for its whole bounded window. Both
    // tracks await this same promise; seeking reuses the prepared local bytes.
-   preparation??=reader.read({offset:0,size:1}).then(()=>{if(!closed)ready=true;});
-   await preparation;
+   await prepare();
    if(closed)throw new Error('Local video input is closed.');
    return reader.read(sample);
   },

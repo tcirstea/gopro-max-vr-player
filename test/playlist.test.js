@@ -1,3 +1,4 @@
+import {createNextClipPreloader,shouldPreloadNext} from '../src/next-clip-preload.js';
 import {installKeyboardControls} from '../src/keyboard-controls.js';
 import {createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS} from '../src/playlist-model.js';
 import {test} from 'node:test';
@@ -5,12 +6,12 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 const source=readFileSync(new URL('../src/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');
-function setup({inspect,create}={}){
- const elements=new Map(),players=[],revoked=[];
+function setup({inspect,create,prepare}={}){
+ const elements=new Map(),players=[],revoked=[],createdObjects=[],sources=[],windowHandlers={};
  function el(id){if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,value:0,checked:true,paused:true,handlers:{},addEventListener(name,fn){(this.handlers[name]??=[]).push(fn);},emit(name){for(const fn of this.handlers[name]||[])fn({target:this});},canPlayType(){return '';},pause(){this.paused=true;},play(){this.paused=false;return Promise.resolve();},load(){this.readyState=0;},removeAttribute(){},replaceChildren(...children){this.children=children;}});return elements.get(id);}
- const context=vm.createContext({installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:el,createElement:()=>({})},window:{addEventListener(){}},URL:{createObjectURL:()=>`blob:${Math.random()}`,revokeObjectURL:url=>revoked.push(url)},createRenderer:()=>({setSource(){},setMaxSources(){}}),demoPanorama:()=>({}),formatTime:String,inspectFile:inspect|| (async()=>({nativeCandidate:true,tracks:[]})),createNativePlayer:create|| (async(file,options)=>{const player={file,options,playing:false,duration:20,audioState:{available:true,modes:['stereo','ambisonic'],mode:'stereo'},setAudioMode(mode){this.audioState.mode=mode;},setMuted(value){this.muted=value;},setVolume(value){this.volume=value;},play(){this.playing=true;return Promise.resolve();},pause(){this.playing=false;},close(){this.closed=true;}};players.push(player);return player;})});
+ const context=vm.createContext({createNextClipPreloader,shouldPreloadNext,prepareNextClip:prepare|| (async()=>null),installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:el,createElement:()=>({})},window:{addEventListener(name,fn){windowHandlers[name]=fn;}},URL:{createObjectURL:value=>{createdObjects.push(value);return `blob:${Math.random()}`;},revokeObjectURL:url=>revoked.push(url)},createRenderer:()=>({setSource(value){sources.push(value);},setMaxSources(){}}),demoPanorama:()=>({}),formatTime:String,inspectFile:inspect|| (async()=>({nativeCandidate:true,tracks:[]})),createNativePlayer:create|| (async(file,options)=>{const player={file,options,playing:false,duration:20,audioState:{available:true,modes:['stereo','ambisonic'],mode:'stereo'},setAudioMode(mode){this.audioState.mode=mode;},setMuted(value){this.muted=value;},setVolume(value){this.volume=value;},play(){this.playing=true;return Promise.resolve();},pause(){this.playing=false;},seek(value){this.lastSeek=value;},close(){this.closed=true;}};players.push(player);return player;})});
  vm.runInContext(source,context);
- return {context,el,players,revoked};
+ return {context,el,players,revoked,createdObjects,sources,windowHandlers};
 }
 const files=[{name:'one.360',size:100},{name:'two.360',size:200},{name:'three.360',size:300}];
 const flush=async()=>{for(let i=0;i<10;i++)await Promise.resolve();};
@@ -88,4 +89,84 @@ test('confirmed equirectangular projection survives switching away and back',asy
  const {context:c,el}=setup({inspect:async()=>({tracks:[],videoTracks:[{}]})});await c.setPlaylist(files);
  el('equirect').emit('click');await c.selectClip(1);assert.equal(el('equirect').hidden,false);
  await c.selectClip(0);assert.equal(el('equirect').hidden,true);assert.match(el('status').textContent,/Loading local video/);
+});
+
+const settlePreload=()=>new Promise(resolve=>setImmediate(resolve));
+const nativeInfo={nativeCandidate:true,tracks:[],videoTracks:[{},{}]};
+function warmResult(extra={}){return {info:nativeInfo,movie:{prepared:true},closed:0,close(){this.closed++;},...extra};}
+function advancing(player,currentTime=10,extra={}){player.options.onState({playing:true,buffering:false,preparing:false,currentTime,duration:20,...extra});}
+function ended(player){player.options.onState({playing:false,currentTime:20,duration:20});}
+test('natural native EOF adopts warmed successor without a second standby player or demo flash',async()=>{
+ const warm=warmResult(),calls=[];const h=setup({prepare:async(file,options)=>{calls.push({file,options});return warm;}});
+ await h.context.setPlaylist(files);advancing(h.players[0],4);await settlePreload();assert.equal(calls.length,0);
+ advancing(h.players[0]);await settlePreload();assert.equal(calls.length,1);assert.equal(calls[0].file,files[1]);assert.equal(h.players.length,1);
+ h.el('muted').checked=false;h.el('muted').emit('change');const sourceCount=h.sources.length;ended(h.players[0]);assert.equal(h.players.length,1,'handoff leaves decoder callback before closing frames');await settlePreload();
+ assert.equal(h.players.length,2);assert.equal(h.players[1].options.preparedMovie,warm.movie);assert.equal(h.players[1].playing,true);assert.equal(h.players[1].muted,false);assert.equal(h.players[0].closed,true);assert.equal(warm.closed,0,'movie ownership belongs to successor now');assert.equal(h.sources.length,sourceCount,'hold last texture instead of replacing it with demo');
+});
+test('manual Next or gallery selection discards warmed data and retains ordinary selection behavior',async()=>{
+ for(const gallery of [false,true]){
+  const warm=warmResult(),h=setup({prepare:async()=>warm});await h.context.setPlaylist(files);advancing(h.players[0]);await settlePreload();
+  if(gallery)await h.context.selectPlaylistItem(vm.runInContext('playlist[1].id',h.context));else await h.context.selectClip(1,true);
+  assert.equal(warm.closed,1);assert.equal(h.players[1].options.preparedMovie,undefined);assert.equal(h.players[1].playing,true);assert.equal(h.players[1].file,files[1]);
+ }
+});
+test('sorting retargets by stable identity and only the newly ordered successor is adopted',async()=>{
+ const prepared=[];const h=setup({prepare:async file=>{const value=warmResult();prepared.push({file,value});return value;}});
+ const input=[{name:'duplicate.360',size:100},{name:'duplicate.360',size:300},{name:'last.360',size:200}];await h.context.setPlaylist(input);advancing(h.players[0]);await settlePreload();
+ h.context.sortPlaylist('size',false);await settlePreload();assert.equal(prepared[0].value.closed,1);assert.equal(prepared[1].file,input[2]);assert.equal(h.players.length,1);
+ ended(h.players[0]);await settlePreload();assert.equal(h.players[1].file,input[2]);assert.equal(h.players[1].options.preparedMovie,prepared[1].value.movie);
+});
+test('EOF uses ordinary load immediately if warmup is pending, and late readiness is closed',async()=>{
+ let resolve;const h=setup({prepare:()=>new Promise(r=>resolve=r)});await h.context.setPlaylist(files);advancing(h.players[0]);await settlePreload();
+ ended(h.players[0]);await settlePreload();assert.equal(h.players.length,2);assert.equal(h.players[1].options.preparedMovie,undefined);assert.equal(h.players[1].playing,true);
+ const stale=warmResult();resolve(stale);await settlePreload();assert.equal(stale.closed,1);assert.equal(h.players.length,2);
+});
+test('failed speculation is silent, attempted once, and retried through ordinary opening at EOF',async()=>{
+ let attempts=0,inspections=0;const h=setup({inspect:async()=>{inspections++;return nativeInfo;},prepare:async()=>{attempts++;throw Error('temporary disk error');}});await h.context.setPlaylist(files);const before=h.el('status').textContent;
+ advancing(h.players[0]);await settlePreload();advancing(h.players[0],11);await settlePreload();assert.equal(attempts,1);assert.equal(h.el('status').textContent,before);assert.equal(h.el('play').disabled,false);
+ ended(h.players[0]);await settlePreload();assert.equal(inspections,2);assert.equal(h.players[1].playing,true);
+});
+test('pause, decoder stall, manual seek, replacement, demo and page disposal release speculation',async()=>{
+ for(const mode of ['pause','buffer','seek','replace','demo','pagehide']){
+  const warm=warmResult(),h=setup({prepare:async()=>warm});await h.context.setPlaylist(files);advancing(h.players[0]);await settlePreload();
+  if(mode==='pause')advancing(h.players[0],10,{playing:false});
+  if(mode==='buffer')advancing(h.players[0],10,{buffering:true});
+  if(mode==='seek')h.context.seekRelative(1);
+  if(mode==='replace')await h.context.setPlaylist([files[2]]);
+  if(mode==='demo')h.el('demo').emit('click');
+  if(mode==='pagehide')h.windowHandlers.pagehide();
+  assert.equal(warm.closed,1,mode);await settlePreload();
+ }
+});
+test('seek discards old preparation but advancing past the new position can prepare a fresh successor',async()=>{
+ const results=[],h=setup({prepare:async()=>{const value=warmResult();results.push(value);return value;}});await h.context.setPlaylist(files);advancing(h.players[0]);await settlePreload();h.context.seekRelative(1);
+ assert.equal(results[0].closed,1);advancing(h.players[0],11);await settlePreload();assert.equal(results.length,1);advancing(h.players[0],11.25);await settlePreload();assert.equal(results.length,2);
+});
+test('confirmed equirectangular EOF uses warmed bytes without a hidden playback element',async()=>{
+ const blob={localPreparedBlob:true},info={tracks:[],videoTracks:[{}]},warm=warmResult({info,movie:undefined,blob}),calls=[];
+ const h=setup({inspect:async()=>info,prepare:async(file,options)=>{calls.push({file,options});return warm;}});
+ await h.context.setPlaylist(files.slice(0,2));h.el('equirect').emit('click');await h.context.selectClip(1);h.el('equirect').emit('click');await h.context.selectClip(0);
+ const video=h.el('video');Object.assign(video,{readyState:3,duration:20,currentTime:10,ended:false,paused:false});video.emit('timeupdate');await settlePreload();assert.equal(calls.length,1);assert.equal(calls[0].options.confirmed,true);assert.equal(h.players.length,0);
+ video.ended=true;video.emit('ended');await settlePreload();assert.equal(h.createdObjects.at(-1),blob);assert.equal(h.el('equirect').hidden,true);assert.equal(warm.closed,1);
+ video.readyState=2;video.emit('loadeddata');await settlePreload();assert.equal(video.paused,false);
+});
+test('unconfirmed browser successor still requires projection approval after metadata preloading',async()=>{
+ const info={tracks:[],videoTracks:[{}]},calls=[],h=setup({inspect:async()=>info,prepare:async(file,options)=>{calls.push(options);return warmResult({info,movie:undefined});}});
+ await h.context.setPlaylist(files.slice(0,2));h.el('equirect').emit('click');const video=h.el('video');Object.assign(video,{readyState:3,duration:20,currentTime:10,ended:false,paused:false});video.emit('timeupdate');await settlePreload();assert.equal(calls[0].confirmed,false);
+ video.ended=true;video.emit('ended');await settlePreload();assert.equal(h.el('equirect').hidden,false);assert.equal(h.createdObjects.length,1);h.el('equirect').emit('click');video.readyState=2;video.emit('loadeddata');await settlePreload();assert.equal(video.paused,false);
+});
+test('last item, stale callbacks and newly replaced queues cannot preload an old successor',async()=>{
+ const calls=[],h=setup({prepare:async file=>{calls.push(file);return warmResult();}});await h.context.setPlaylist(files);const old=h.players[0];await h.context.setPlaylist([files[2]]);advancing(old);advancing(h.players[1]);await settlePreload();assert.equal(calls.length,0);ended(h.players[1]);await settlePreload();assert.equal(h.players.length,2);
+});
+test('browser pause cannot restart speculation through a later sort; seek and wait cancel before rearming',async()=>{
+ const info={tracks:[],videoTracks:[{}]},values=[],h=setup({inspect:async()=>info,prepare:async()=>{const result=warmResult({info,movie:undefined});values.push(result);return result;}});
+ await h.context.setPlaylist(files);h.el('equirect').emit('click');const video=h.el('video');Object.assign(video,{readyState:3,duration:20,currentTime:10,ended:false,paused:false});video.emit('timeupdate');await settlePreload();assert.equal(values.length,1);
+ video.paused=true;video.emit('pause');h.context.sortPlaylist('added',false);await settlePreload();assert.equal(values.length,1);assert.equal(values[0].closed,1);
+ video.paused=false;video.emit('timeupdate');await settlePreload();assert.equal(values.length,2);video.currentTime=12;video.seeking=true;video.emit('seeking');video.emit('timeupdate');await settlePreload();assert.equal(values[1].closed,1);assert.equal(values.length,2);
+ video.seeking=false;video.currentTime=12.25;video.emit('timeupdate');await settlePreload();assert.equal(values.length,3);video.emit('waiting');h.context.sortPlaylist('added',false);await settlePreload();assert.equal(values[2].closed,1);assert.equal(values.length,3);
+});
+test('page visibility cancels ready input and suppresses new speculative requests while hidden',async()=>{
+ const values=[],h=setup({prepare:async()=>{const result=warmResult();values.push(result);return result;}});await h.context.setPlaylist(files);advancing(h.players[0]);await settlePreload();assert.equal(values.length,1);
+ h.context.document.hidden=true;h.context.updateNextPreload();advancing(h.players[0],11);await settlePreload();assert.equal(values[0].closed,1);assert.equal(values.length,1);
+ h.context.document.hidden=false;advancing(h.players[0],12);await settlePreload();assert.equal(values.length,2);
 });

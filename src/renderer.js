@@ -30,7 +30,7 @@ export function createRenderer(canvas) {
   let xrTransition=null;
   let xrCenter=quaternionMatrix(IDENTITY_QUATERNION),pendingRecenter=false;
   let xrPanel=null,panelStateCallback=null;
-  let desktopMirror=false,mirrorPainted=false;
+  let desktopMirror=false,mirrorPainted=false,mirrorQuality='performance',mirrorLimits=null;
   const panelError=error=>canvas.dispatchEvent(new CustomEvent('xrerror',{detail:`VR controls: ${error.message}`}));
   function togglePanel(input,reveal=false){
     try{
@@ -54,7 +54,7 @@ export function createRenderer(canvas) {
     if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}
     return {w,h};
   }
-  function mirrorChanged(){canvas.dispatchEvent(new CustomEvent('xrmirrorchange',{detail:{enabled:desktopMirror,active:desktopMirror&&!!session}}));}
+  function mirrorChanged(){canvas.dispatchEvent(new CustomEvent('xrmirrorchange',{detail:{enabled:desktopMirror,active:desktopMirror&&!!session,quality:mirrorQuality}}));}
   // Clear a previously mirrored image immediately on opt-out/tracking loss.
   // Never leave a stale headset frame exposed, or touch the XR layer here.
   function clearMirror(){
@@ -79,7 +79,21 @@ export function createRenderer(canvas) {
     // Reuse a real eye's projection and pose, including asymmetric frusta, so
     // zoom and all panorama corrections are identical. Letterbox, never stretch.
     // This is another draw of existing textures, not readback, capture or decode.
-    const {w,h}=resizeDesktop(1280),viewport=mirrorViewport(w,h,eyeViewport);
+    // Limit only the monitor buffer; never change the XR layer or eye viewport.
+    // Query lazily so disabled mirroring does no extra graphics work.
+    if(!mirrorLimits){
+      const limit=value=>Number.isFinite(value)&&value>=1?Math.floor(value):1280;
+      const viewportLimit=gl.getParameter(gl.MAX_VIEWPORT_DIMS);
+      const maxDimension=Math.min(limit(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)),limit(gl.getParameter(gl.MAX_TEXTURE_SIZE)));
+      mirrorLimits={maxWidth:Math.min(maxDimension,limit(viewportLimit?.[0])),maxHeight:Math.min(maxDimension,limit(viewportLimit?.[1]))};
+    }
+    const size=mirrorDrawingBufferSize(canvas.clientWidth,canvas.clientHeight,eyeViewport,{quality:mirrorQuality,pixelRatio:globalThis.devicePixelRatio,...mirrorLimits});
+    if(canvas.width!==size.w||canvas.height!==size.h){canvas.width=size.w;canvas.height=size.h;}
+    // Some implementations allocate a smaller default buffer under pressure.
+    // Fit the buffer actually provided, rather than issuing an oversized draw.
+    const w=typeof gl.drawingBufferWidth==='number'?gl.drawingBufferWidth:size.w,h=typeof gl.drawingBufferHeight==='number'?gl.drawingBufferHeight:size.h;
+    if(!(w>0&&h>0))throw new Error('The monitor drawing buffer is unavailable.');
+    const viewport=mirrorViewport(w,h,eyeViewport);
     gl.bindFramebuffer(gl.FRAMEBUFFER,null);mirrorPainted=true;
     gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);
     drawXRView(view,viewport);
@@ -162,6 +176,10 @@ export function createRenderer(canvas) {
     setDesktopMirror(enabled){
       desktopMirror=!!enabled;if(!desktopMirror)clearMirror();mirrorChanged();
     },
+    setDesktopMirrorQuality(quality){
+      if(quality!=='performance'&&quality!=='headset')return;
+      mirrorQuality=quality;mirrorChanged();
+    },
     onXRPanelState(callback){panelStateCallback=callback;return ()=>{if(panelStateCallback===callback)panelStateCallback=null;};},
     onBeforeRender(callback){frameCallback=callback;return ()=>{if(frameCallback===callback)frameCallback=null;};},
     // Camera-to-raw-source sampling rotation, column-major. Includes XR and
@@ -218,6 +236,26 @@ export function createRenderer(canvas) {
     canvas.addEventListener('vrend',()=>vr.textContent='Enter VR');
   }
   return api;
+}
+// Match headset means the fitted image, not the letterboxed canvas, reaches
+// the actual eye render resolution. CSS pixels/DPR do not describe XR pixels.
+// Clamp the entire monitor buffer uniformly to keep its display aspect intact.
+export function mirrorDrawingBufferSize(width,height,eye,{quality='performance',pixelRatio=1,maxWidth=1280,maxHeight=1280}={}){
+  const positive=value=>Number.isFinite(value)&&value>0;
+  if(!positive(width)||!positive(height))return {w:1,h:1};
+  let w,h;
+  if(quality==='headset'&&positive(eye?.width)&&positive(eye?.height)){
+    const scale=Math.max(eye.width/width,eye.height/height);
+    w=Math.ceil(width*scale);h=Math.ceil(height*scale);
+  }else{
+    const scale=Math.min(positive(pixelRatio)?pixelRatio:1,2);
+    w=Math.max(1,Math.round(width*scale));h=Math.max(1,Math.round(height*scale));
+    const reduction=Math.min(1,1280/Math.max(w,h));
+    w=Math.max(1,Math.round(w*reduction));h=Math.max(1,Math.round(h*reduction));
+  }
+  const limit=value=>positive(value)?Math.max(1,Math.floor(value)):1280;
+  const limitWidth=limit(maxWidth),limitHeight=limit(maxHeight),reduction=Math.min(1,limitWidth/w,limitHeight/h);
+  return {w:Math.min(limitWidth,Math.max(1,Math.round(w*reduction))),h:Math.min(limitHeight,Math.max(1,Math.round(h*reduction)))};
 }
 // Fit one eye's render aspect without cropping its field of view. Coordinates
 // are drawing-buffer pixels; black bars stay outside the returned viewport.

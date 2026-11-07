@@ -7,18 +7,18 @@ import {createXRViewDrag} from '../src/xr-view-drag.js';
 import {createXRControls} from '../src/xr-controls.js';
 import {maxLayout,MAX_GLSL} from '../src/max-projection.js';
 import * as quaternions from '../src/quaternion.js';
-import {mirrorViewport,invert4} from '../src/renderer.js';
+import {mirrorViewport,mirrorDrawingBufferSize,invert4} from '../src/renderer.js';
 const identity=[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];
-function harness(){
+function harness({maxTexture=8192,maxRenderbuffer=8192,maxViewport=[8192,8192],pixelRatio=1,hasXR=true}={}){
  let windowFrame,xrFrame,framebuffer=null,viewport=[0,0,1,1],lost=false,failMirror=false,advances=0,uploads=0,panelUpdates=0;
- const draws=[],clears=[],panelDraws=[],events=[],canvasEvents={},sessionEvents={},documentEvents={},uniforms={},bindings=[];
+ const draws=[],clears=[],panelDraws=[],events=[],canvasEvents={},sessionEvents={},documentEvents={},uniforms={},bindings=[],queries=[],viewports={left:{x:0,y:0,width:400,height:400},right:{x:400,y:0,width:400,height:400}};
  const gl=new Proxy({
   getShaderParameter:()=>true,getProgramParameter:()=>true,isContextLost:()=>lost,
   getUniformLocation:(_p,n)=>n,
   uniform1f:(n,v)=>uniforms[n]=v,
   uniformMatrix3fv:(n,_t,v)=>uniforms[n]=Array.from(v),
   uniformMatrix4fv:(n,_t,v)=>uniforms[n]=Array.from(v),
-  getParameter:n=>n==='FRAMEBUFFER_BINDING'?framebuffer:n==='MAX_TEXTURE_SIZE'?8192:null,
+  getParameter:n=>{queries.push(n);return n==='FRAMEBUFFER_BINDING'?framebuffer:n==='MAX_TEXTURE_SIZE'?maxTexture:n==='MAX_RENDERBUFFER_SIZE'?maxRenderbuffer:n==='MAX_VIEWPORT_DIMS'?maxViewport:null;},
   bindFramebuffer:(_target,value)=>{framebuffer=value;bindings.push(value);},
   viewport:(...v)=>viewport=v,
   drawArrays:()=>{if(failMirror&&framebuffer===null)throw Error('synthetic mirror draw failure');draws.push({framebuffer,viewport:[...viewport],uniforms:structuredClone(uniforms)});},
@@ -35,11 +35,11 @@ function harness(){
  const views=[{eye:'right',projectionMatrix:identity,transform:{matrix:rightMatrix,inverse:{matrix:identity}}},{eye:'left',projectionMatrix:leftProjection,transform:{matrix:leftMatrix,inverse:{matrix:identity}}}];
  let pose={transform:{matrix:identity},views},controller=identity;
  const frame={session,getViewerPose:()=>pose,getPose:()=>({transform:{matrix:controller}})};
- const context=vm.createContext({createZoomDetents,createXRViewDrag,createXRControls,maxLayout,MAX_GLSL,...quaternions,Event,CustomEvent,Promise,performance,document,navigator:{xr:{requestSession:async()=>session}},requestAnimationFrame:f=>windowFrame=f,devicePixelRatio:1,XRWebGLLayer:class{framebuffer='XR';getViewport(view){return {x:view.eye==='right'?400:0,y:0,width:400,height:400};}},createXRPanel:()=>({show(){},toggle(){},reset(){},update(){panelUpdates++;},draw(view){panelDraws.push({view,framebuffer,viewport:[...viewport]});}})});
+ const context=vm.createContext({createZoomDetents,createXRViewDrag,createXRControls,maxLayout,MAX_GLSL,...quaternions,Event,CustomEvent,Promise,performance,document,navigator:{xr:hasXR?{requestSession:async()=>session}:undefined},requestAnimationFrame:f=>windowFrame=f,devicePixelRatio:pixelRatio,XRWebGLLayer:class{framebuffer='XR';getViewport(view){return viewports[view.eye]||viewports.left;}},createXRPanel:()=>({show(){},toggle(){},reset(){},update(){panelUpdates++;},draw(view){panelDraws.push({view,framebuffer,viewport:[...viewport]});}})});
  vm.runInContext(readFileSync(new URL('../src/renderer.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,''),context);
  const renderer=context.createRenderer(canvas);renderer.onBeforeRender(()=>advances++);
  const initialUploads=uploads;
- return {renderer,canvas,canvasEvents,document,documentEvents,session,sessionEvents,input,views,frame,draws,clears,panelDraws,events,uniforms,bindings,
+ return {renderer,canvas,canvasEvents,document,documentEvents,session,sessionEvents,input,views,frame,draws,clears,panelDraws,events,uniforms,bindings,viewports,queries,gl,
   tick:(time=0)=>xrFrame(time,frame),windowTick:()=>windowFrame(0),setPose:value=>pose=value,setController:value=>controller=value,
   get pose(){return pose;},get advances(){return advances;},get uploads(){return uploads-initialUploads;},get framebuffer(){return framebuffer;},get viewport(){return viewport;},get panelUpdates(){return panelUpdates;},set lost(v){lost=v;},set failMirror(v){failMirror=v;}
  };
@@ -135,4 +135,75 @@ test('letterboxing fits wide/tall monitor and asymmetric eye sizes without crop'
  assert.deepEqual(mirrorViewport(1600,900,{width:1000,height:1000}),{x:350,y:0,width:900,height:900});
  assert.deepEqual(mirrorViewport(600,1000,{width:1200,height:1000}),{x:0,y:250,width:600,height:500});
  assert.deepEqual(mirrorViewport(800,500,{width:1600,height:1000}),{x:0,y:0,width:800,height:500});
+});
+
+test('headset sizing allocates black-bar space so the fitted eye reaches actual XR pixels',()=>{
+ const eye={width:2000,height:1800},limits={quality:'headset',maxWidth:16384,maxHeight:16384};
+ for(const [width,height]of [[800,450],[3840,2160],[450,800],[900,900],[1234,777]]){
+  const {w,h}=mirrorDrawingBufferSize(width,height,eye,limits),fitted=mirrorViewport(w,h,eye);
+  assert.ok(fitted.width>=eye.width);assert.ok(fitted.height>=eye.height);
+  assert.ok(fitted.width<=eye.width+2);assert.ok(fitted.height<=eye.height+2);
+  assert.ok(Math.abs(w/h-width/height)<.002);
+  assert.deepEqual(mirrorDrawingBufferSize(width,height,eye,{...limits,pixelRatio:3}),{w,h},'XR pixels must not be multiplied by desktop DPR');
+ }
+ assert.deepEqual(mirrorDrawingBufferSize(3840,2160,{width:1920,height:1920},limits),{w:3414,h:1920});
+});
+test('sizing clamps both GPU dimensions uniformly and handles small or invalid bounds safely',()=>{
+ const eye={width:2000,height:2000};
+ assert.deepEqual(mirrorDrawingBufferSize(1600,900,eye,{quality:'headset',maxWidth:2048,maxHeight:4096}),{w:2048,h:1152});
+ assert.deepEqual(mirrorDrawingBufferSize(1600,900,eye,{quality:'headset',maxWidth:8192,maxHeight:1024}),{w:1821,h:1024});
+ const tiny=mirrorDrawingBufferSize(1,100000,eye,{quality:'headset',maxWidth:2,maxHeight:3});assert.deepEqual(tiny,{w:1,h:3});
+ for(const value of [0,-1,NaN,Infinity]){
+  assert.deepEqual(mirrorDrawingBufferSize(value,900,eye),{w:1,h:1});
+  const size=mirrorDrawingBufferSize(1600,900,eye,{quality:'headset',maxWidth:value,maxHeight:value});assert.ok(size.w<=1280&&size.h<=1280);
+ }
+ assert.deepEqual(mirrorDrawingBufferSize(1600,900,null,{quality:'headset'}),{w:1280,h:720});
+});
+test('performance retains the 1280 cap, display DPR cap and smaller embedded view behavior',()=>{
+ const limits={maxWidth:16384,maxHeight:16384};
+ assert.deepEqual(mirrorDrawingBufferSize(3840,2160,null,limits),{w:1280,h:720});
+ assert.deepEqual(mirrorDrawingBufferSize(400,250,null,{...limits,pixelRatio:3}),{w:800,h:500});
+ assert.deepEqual(mirrorDrawingBufferSize(400,250,null,{...limits,pixelRatio:NaN}),{w:400,h:250});
+ assert.deepEqual(mirrorDrawingBufferSize(800,500,null,{maxWidth:600,maxHeight:600}),{w:600,h:375});
+});
+test('quality changes are inert outside XR and disabled mirroring, including browsers with no XR',async()=>{
+ const h=harness({hasXR:false});h.renderer.setDesktopMirrorQuality('headset');h.renderer.setDesktopMirror(true);h.windowTick();
+ assert.equal(h.draws.length,1);assert.equal(h.draws[0].uniforms.xr,0);assert.equal(h.canvas.width,800);assert.equal(h.canvas.height,500);
+ assert.equal(h.queries.includes('MAX_VIEWPORT_DIMS'),false);assert.equal(h.events.at(-1).detail.quality,'headset');
+ await assert.rejects(h.renderer.enterVR(),/WebXR is unavailable/);
+ const off=harness();off.renderer.setDesktopMirrorQuality('headset');await off.renderer.enterVR();off.tick();
+ assert.equal(off.draws.length,2);assert.equal(off.canvas.width,800);assert.equal(off.queries.includes('MAX_VIEWPORT_DIMS'),false);
+ const eventCount=off.events.length;off.renderer.setDesktopMirrorQuality('invalid');assert.equal(off.events.length,eventCount);
+});
+test('Match headset uses the actual left viewport and adapts live to fullscreen, eye resolution and quality',async()=>{
+ const h=harness({pixelRatio:2});h.viewports.left={x:0,y:0,width:2000,height:1800};h.viewports.right={x:2000,y:0,width:2400,height:2100};
+ h.renderer.setSource({tagName:'VIDEO',paused:false,readyState:3});h.renderer.setDesktopMirrorQuality('headset');h.renderer.setDesktopMirror(true);await h.renderer.enterVR();
+ h.canvas.clientWidth=3840;h.canvas.clientHeight=2160;h.tick();
+ assert.equal(h.canvas.width,3200);assert.equal(h.canvas.height,1800);assert.deepEqual(h.draws.at(-1).viewport,[600,0,2000,1800]);
+ assert.deepEqual(h.draws[1].viewport,[0,0,2000,1800]);assert.deepEqual(h.draws[0].viewport,[2000,0,2400,2100]);
+ assert.deepEqual(h.draws[1].uniforms,h.draws[2].uniforms);assert.equal(h.uploads,1);assert.equal(h.advances,1);
+ h.canvas.clientWidth=600;h.canvas.clientHeight=1000;h.tick(20);assert.equal(h.canvas.width,2000);assert.equal(h.canvas.height,3334);assert.deepEqual(h.draws.at(-1).viewport,[0,767,2000,1800]);
+ h.viewports.left={x:0,y:0,width:1000,height:1000};h.tick(40);assert.deepEqual(h.draws.at(-1).viewport,[0,333,1000,1000]);
+ h.renderer.setDesktopMirrorQuality('performance');h.tick(60);assert.equal(h.canvas.width,768);assert.equal(h.canvas.height,1280);assert.deepEqual(h.draws.at(-1).viewport,[0,256,768,768]);
+ h.renderer.setDesktopMirrorQuality('headset');h.tick(80);assert.equal(h.canvas.width,1000);assert.equal(h.canvas.height,1667);
+ assert.equal(h.queries.filter(n=>n==='MAX_VIEWPORT_DIMS').length,1,'GPU caps are cached');assert.equal(h.advances,5);assert.equal(h.uploads,5);
+ assert.equal(h.framebuffer,'XR');assert.deepEqual(h.viewport,[0,0,1000,1000]);
+});
+test('renderer honors texture, renderbuffer, viewport and actual allocation limits without altering XR',async()=>{
+ for(const limits of [{maxTexture:2048},{maxRenderbuffer:2048},{maxViewport:[2048,4096]}]){
+  const h=harness(limits);h.viewports.left={x:0,y:0,width:2000,height:2000};h.renderer.setDesktopMirrorQuality('headset');h.renderer.setDesktopMirror(true);await h.renderer.enterVR();h.tick();
+  assert.equal(h.canvas.width,2048);assert.equal(h.canvas.height,1280);assert.deepEqual(h.draws.at(-1).viewport,[384,0,1280,1280]);
+  assert.deepEqual(h.draws[1].viewport,[0,0,2000,2000]);assert.equal(h.framebuffer,'XR');
+ }
+ const h=harness();h.gl.drawingBufferWidth=1024;h.gl.drawingBufferHeight=640;h.renderer.setDesktopMirrorQuality('headset');h.renderer.setDesktopMirror(true);await h.renderer.enterVR();h.tick();
+ assert.deepEqual(h.draws.at(-1).viewport,[192,0,640,640]);assert.equal(h.framebuffer,'XR');
+ h.gl.drawingBufferWidth=0;h.tick(20);assert.equal(h.events.at(-1).type,'xrmirrorerror');assert.equal(h.events.at(-2).detail.quality,'headset');assert.equal(h.framebuffer,'XR');
+ h.tick(40);assert.equal(h.advances,3);assert.equal(h.draws.length,7,'headset continues after unavailable mirror buffer');
+});
+test('headset quality persists only within the renderer session and does not reset view or playback',async()=>{
+ const h=harness();h.renderer.setDesktopMirrorQuality('headset');h.renderer.setDesktopMirror(true);await h.renderer.enterVR();h.tick();
+ h.renderer.setDesktopMirror(false);h.tick(20);h.renderer.setDesktopMirror(true);h.tick(40);assert.equal(h.events.at(-1).detail.quality,'headset');
+ await h.renderer.enterVR();h.windowTick();assert.equal(h.canvas.width,800);assert.equal(h.canvas.height,500);
+ await h.renderer.enterVR();h.tick(60);assert.equal(h.canvas.width,640);assert.equal(h.canvas.height,400);assert.equal(h.events.at(-1).detail.quality,'headset');
+ const fresh=harness();fresh.renderer.setDesktopMirror(true);assert.equal(fresh.events.at(-1).detail.quality,'performance');
 });

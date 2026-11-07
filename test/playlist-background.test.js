@@ -1,3 +1,4 @@
+import {createNextClipPreloader,shouldPreloadNext} from '../src/next-clip-preload.js';
 import {xrClipCaption} from '../src/xr-clip-caption.js';
 import {installKeyboardControls} from '../src/keyboard-controls.js';
 import {test} from 'node:test';
@@ -24,7 +25,7 @@ function setup({metadata = async () => ({}), thumbnail = async () => null, stora
     }
     return elements.get(id);
   }
-  const context = vm.createContext({installKeyboardControls,createPlaylistEntries, sortPlaylistEntries, PLAYLIST_SORTS, AbortController,
+  const context = vm.createContext({createNextClipPreloader,shouldPreloadNext,prepareNextClip:async()=>null,installKeyboardControls,createPlaylistEntries, sortPlaylistEntries, PLAYLIST_SORTS, AbortController,
     createPlaylistBrowser: () => ({render() {}, close() { closes++; }}), readPlaylistMetadata: metadata,
     createPlaylistThumbnail: (file, options) => { previews.push({file, ...options}); return thumbnail(file, options); },
     document: {getElementById: el, createElement: () => ({})}, window: {localStorage: storage, addEventListener: (name, fn) => { windows[name] = fn; }},

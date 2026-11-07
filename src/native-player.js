@@ -4,9 +4,9 @@ import {createMaxStabilization} from './max-stabilization.js';
 // A codec can retain inputs internally after decodeQueueSize reaches zero. Do not
 // confuse these with queued decode requests, or a small output budget deadlocks it.
 const OUTPUT_BUFFER=6, MAX_IN_FLIGHT=24, DECODE_QUEUE=4, START_BUFFER=3;
-export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=()=>{},autoTick=true}){
- if(!globalThis.isSecureContext||!globalThis.VideoDecoder)throw new Error('Native MAX playback needs WebCodecs in a secure context (HTTPS or localhost).');
- const movie=await demuxNative(file);
+export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=()=>{},autoTick=true,preparedMovie=null}){
+ if(!globalThis.isSecureContext||!globalThis.VideoDecoder){preparedMovie?.close();throw new Error('Native MAX playback needs WebCodecs in a secure context (HTTPS or localhost).');}
+ const movie=preparedMovie||await demuxNative(file);
  const configs=movie.tracks.map(t=>({...t.config,hardwareAcceleration:'prefer-hardware',optimizeForLatency:true}));
  try{for(const config of configs){const result=await VideoDecoder.isConfigSupported(config);if(!result.supported)throw new Error(`This device cannot decode ${config.codec} at ${config.codedWidth} × ${config.codedHeight} through WebCodecs. Try a browser/OS with hardware HEVC support.`);}}catch(error){movie.close();throw error;}
  let audio=null,stabilization=null,playRequest=0;const orientations=new Map();
@@ -84,8 +84,8 @@ export async function createNativePlayer(file,{onFrames,onState=()=>{},onError=(
   }
   if(autoTick)raf=requestAnimationFrame(tick);
  }
- stabilization=await createMaxStabilization(file,movie.tracks[0].samples,(sample,index)=>movie.read(sample,movie.telemetry.inputIndex,index),movie.telemetry);
- audio=await createNativeAudio(movie,{onChange:notify});
+ try{stabilization=await createMaxStabilization(file,movie.tracks[0].samples,(sample,index)=>movie.read(sample,movie.telemetry.inputIndex,index),movie.telemetry);
+ audio=await createNativeAudio(movie,{onChange:notify});}catch(error){audio?.close();stabilization?.close();movie.close();throw error;}
  try{seek(0);}catch(error){closed=true;dispose();audio?.close();stabilization?.close();movie.close();throw error;}if(autoTick)raf=requestAnimationFrame(tick);
  // The renderer can drive this from its active window/XR loop instead.
  return {advance:tick,duration:movie.duration,get playing(){return playing;},get audioState(){return audio.state;},play(){

@@ -112,7 +112,7 @@ export function createChunkedInput(file,{chunkBytes=LARGE_FILE_CHUNK_BYTES,maxCh
   // Loading entries removed above still own their reservations until settled.
  }
  return {
-  read(sample,trackIndex=0,sampleIndex=0){
+  read(sample,trackIndex=0,sampleIndex=0,prefetch=true){
    if(closed)return Promise.reject(new Error('Local video input is closed.'));
    const {offset,size}=sample;
    if(!Number.isSafeInteger(offset)||!Number.isSafeInteger(size)||offset<0||size<=0||size>MAX_SAMPLE_BYTES||!Number.isSafeInteger(offset+size)||offset+size>file.size)return Promise.reject(new Error('Sample points outside the local file or exceeds the safety limit.'));
@@ -124,7 +124,7 @@ export function createChunkedInput(file,{chunkBytes=LARGE_FILE_CHUNK_BYTES,maxCh
    const needed=keys.map(entryFor);needed.forEach(entry=>{entry.refs++;entry.lastUse=++clock;});
    if(needed.every(entry=>entry.state==='ready'))stats.cacheHits++;
    if(needed.some(entry=>entry.speculative&&(entry.state==='ready'||entry.state==='loading')))stats.prefetchHits++;
-   updateAhead(sample,trackIndex,sampleIndex,keys);
+   if(prefetch)updateAhead(sample,trackIndex,sampleIndex,keys);
    const result=new Promise((resolve,reject)=>requests.set(trackIndex,{sample,trackIndex,entries:needed,resolve,reject}));
    queueDrain();return result;
   },

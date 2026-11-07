@@ -89,3 +89,14 @@ test('closing a pending shared preparation prevents decoder input and cache rete
  input.close();finish();const results=await Promise.allSettled(pending);
  assert.ok(results.every(r=>r.status==='rejected'));assert.equal(reads,1);assert.equal(input.getReadDiagnostics()[0].cachedBytes,0);assert.equal(input.getInputState().preparing,false);
 });
+
+test('standby large-file preparation warms only one chunk, reuses it after reset and starts no lookahead',async()=>{
+ const reads=[],size=SMALL_FILE_PRELOAD_BYTES*4,tracks=[{samples:[{offset:SMALL_FILE_PRELOAD_BYTES+8,size:4},{offset:SMALL_FILE_PRELOAD_BYTES*2,size:4}]}];
+ const input=createMovieInput({size,slice(a,b){reads.push([a,b]);return new Blob([new Uint8Array(b-a)]);}},tracks);
+ await input.prepare();await new Promise(r=>setImmediate(r));
+ assert.deepEqual(reads,[[SMALL_FILE_PRELOAD_BYTES,SMALL_FILE_PRELOAD_BYTES*2]]);assert.equal(input.getReadDiagnostics()[0].reservedBytes,SMALL_FILE_PRELOAD_BYTES);assert.equal(input.getReadDiagnostics()[0].prefetchReadOperations,0);
+ input.reset();await input.read(tracks[0].samples[0],0,0);assert.equal(reads.filter(([a])=>a===SMALL_FILE_PRELOAD_BYTES).length,1);input.close();
+});
+test('standby short-file preparation reuses the one shared allocation across decoder reads',async()=>{
+ const file=source(),input=createMovieInput(file);await input.prepare();input.reset();await input.read({offset:8,size:4},0);await input.read({offset:80,size:4},1);assert.deepEqual(file.reads,[[0,128]]);input.close();
+});

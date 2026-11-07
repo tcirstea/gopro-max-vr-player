@@ -147,3 +147,21 @@ test('large-file unsupported codec never starts compressed payload preparation',
  try{globalThis.isSecureContext=true;globalThis.VideoDecoder=class{static async isConfigSupported(){return {supported:false};}};const file=await largeFixture();await assert.rejects(createNativePlayer(file,{onFrames(){}}),/cannot decode/);assert.equal(file.reads.length,0);}
  finally{globalThis.isSecureContext=secure;globalThis.VideoDecoder=decoder;}
 });
+
+test('a prepared native movie is adopted without re-reading its file or allocating standby decoders',async()=>{
+ const saved={isSecureContext:globalThis.isSecureContext,VideoDecoder:globalThis.VideoDecoder,EncodedVideoChunk:globalThis.EncodedVideoChunk,cancelAnimationFrame:globalThis.cancelAnimationFrame};let count=0;
+ class Decoder{static async isConfigSupported(){return {supported:true};}constructor(){count++;this.state='configured';}configure(){}decode(){}async flush(){}close(){this.state='closed';}}
+ const movie=await demuxNative(fixture());await movie.prepare();assert.equal(count,0);
+ Object.assign(globalThis,{isSecureContext:true,VideoDecoder:Decoder,EncodedVideoChunk:class{},cancelAnimationFrame(){}});
+ try{
+  const player=await createNativePlayer({size:1,slice(){assert.fail('Prepared movie should bypass file parsing');}},{preparedMovie:movie,autoTick:false,onFrames(){}});
+  assert.equal(count,2);await new Promise(resolve=>setImmediate(resolve));assert.equal(movie.getReadDiagnostics()[0].readOperations,1);player.close();assert.equal(movie.getReadDiagnostics()[0].cachedBytes,0);
+ }finally{Object.assign(globalThis,saved);movie.close();}
+});
+test('unsupported WebCodecs or codec closes a transferred native movie',async()=>{
+ const secure=globalThis.isSecureContext,decoder=globalThis.VideoDecoder;
+ try{for(const supportedContext of [false,true]){
+  const movie=await demuxNative(fixture());await movie.prepare();globalThis.isSecureContext=supportedContext;globalThis.VideoDecoder=class{static async isConfigSupported(){return {supported:false};}constructor(){assert.fail('Cannot allocate unsupported decoder');}};
+  await assert.rejects(createNativePlayer({}, {preparedMovie:movie,onFrames(){}}),/secure context|cannot decode/);assert.equal(movie.getReadDiagnostics()[0].cachedBytes,0);
+ }}finally{globalThis.isSecureContext=secure;globalThis.VideoDecoder=decoder;}
+});
