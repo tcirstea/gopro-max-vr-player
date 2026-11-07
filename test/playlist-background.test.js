@@ -1,3 +1,4 @@
+import {xrClipCaption} from '../src/xr-clip-caption.js';
 import {installKeyboardControls} from '../src/keyboard-controls.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -187,4 +188,19 @@ test('rapid generation off/on discards stale work and retains one active generat
  h.el('generate-thumbnails').checked=true;h.el('generate-thumbnails').emit('change');
  assert.equal(h.previews.length,1);assert.equal(h.previews[0].signal.aborted,true);
  pending.resolve({stale:true});await flush();assert.equal(h.previews.length,3);assert.ok(h.state().items.every(item=>item.thumbnail.fresh));
+});
+
+
+test('VR caption reads the live selection through delayed metadata, queue replacement, demo and pagehide', async()=>{
+ const pending=[];
+ const h=setup({metadata:file=>{const task=deferred();pending.push({file,...task});return task.promise;}});
+ const caption=()=>xrClipCaption(h.state());
+ await h.context.setPlaylist(files);assert.equal(caption().name,'a.360');assert.equal(caption().date,'Reading file date…');
+ await h.context.selectClip(1,false);assert.equal(caption().name,'b.360');
+ pending[0].resolve({dateTaken:Date.UTC(2023,0,1)});await flush();assert.equal(caption().date,'Reading file date…');
+ pending[1].resolve({dateTaken:Date.UTC(2024,3,15,12)});await flush();assert.match(caption().date,/2024-04-15 12:00:00/);
+ h.context.sortPlaylist('dateTaken',true);assert.equal(caption().name,'b.360');
+ await h.context.setPlaylist([{name:'replacement.mp4',size:3}]);assert.equal(caption().name,'replacement.mp4');assert.equal(caption().date,'Reading file date…');
+ h.el('demo').emit('click');pending[2].resolve({dateTaken:Date.UTC(2020,0,1)});await flush();assert.equal(caption(),null);
+ await h.context.setPlaylist(files);h.windows.pagehide();pending[3].resolve({dateTaken:Date.UTC(2020,0,1)});await flush();assert.equal(caption(),null);
 });

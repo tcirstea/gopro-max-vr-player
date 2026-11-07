@@ -1,6 +1,7 @@
 // World-anchored, stereo WebXR transport. All positions are in reference-space
 // metres, independent of panorama zoom/drag. No DOM overlay support is required.
 import {playlistDate, playlistSize} from './playlist-model.js';
+import {CAPTION_WIDTH,CAPTION_HEIGHT,CAPTION_WORLD_HEIGHT,xrClipCaption,paintClipCaption,clipCaptionCenter} from './xr-clip-caption.js';
 import {createPlaylistPagination, playlistPage} from './playlist-pagination.js';
 const WIDTH=1.2, HEIGHT=.375;
 // Shared layout keeps rendered buttons and ray targets in lockstep.
@@ -65,10 +66,12 @@ export function createPanelTimer(){
 export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
  let browsing=false,viewMode='list',page=0,lastLayout='';
  const pagination=createPlaylistPagination();
- let panel=null,pending=null,visible=false,capture=null,preview=null,lastPaint='',hover=null,mediaId;
+ let panel=null,pending=null,visible=false,capture=null,preview=null,lastPaint='',hover=null,mediaId,disposed=false,lastCaption='';
  const buttons=new Map(),timer=createPanelTimer();
  const canvas=document.createElement('canvas');canvas.width=1024;canvas.height=320;
  const ctx=canvas.getContext('2d');
+ const captionCanvas=document.createElement('canvas');captionCanvas.width=CAPTION_WIDTH;captionCanvas.height=CAPTION_HEIGHT;
+ const captionCtx=captionCanvas.getContext('2d');
  const shader=(type,source)=>{const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s;};
  const program=gl.createProgram();
  const vs=shader(gl.VERTEX_SHADER,'attribute vec2 p; uniform mat4 projection,view; uniform vec3 center,right,up; uniform vec2 extent; varying vec2 uv; void main(){uv=vec2(p.x*.5+.5,.5-p.y*.5);gl_Position=projection*view*vec4(center+right*p.x*extent.x+up*p.y*extent.y,1.);}');
@@ -76,11 +79,11 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
  gl.attachShader(program,vs);gl.attachShader(program,fs);gl.linkProgram(program);gl.deleteShader(vs);gl.deleteShader(fs);
  if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));
  const attribute=gl.getAttribLocation(program,'p'),loc=n=>gl.getUniformLocation(program,n);
- const buffer=gl.createBuffer(),texture=gl.createTexture();
+ const buffer=gl.createBuffer(),texture=gl.createTexture(),captionTexture=gl.createTexture();
  // Do not disturb the panorama's buffer binding during lazy initialization.
  const oldBuffer=gl.getParameter(gl.ARRAY_BUFFER_BINDING);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);gl.bindBuffer(gl.ARRAY_BUFFER,oldBuffer);
  function getPose(frame,space,referenceSpace){try{return space?frame.getPose(space,referenceSpace):null;}catch{return null;}}
- function reset(){browsing=false;panel=null;pending=null;visible=false;capture=null;preview=null;hover=null;buttons.clear();timer.reset();lastPaint='';lastLayout='';}
+ function reset(){browsing=false;panel=null;pending=null;visible=false;capture=null;preview=null;hover=null;buttons.clear();timer.reset();lastPaint='';lastLayout='';lastCaption='';}
  function act(action,value){onAction(action,value);timer.reset();}
  function activate(action,state){
   if(action==='playlist'){browsing=true;pagination.open(state.playlist,playlistCount(state.playlist,viewMode));layout(state);panel.height=.9;lastPaint='';timer.reset();return;}
@@ -151,8 +154,9 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
  for(const name of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,name,gl.LINEAR);
  for(const name of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,name,gl.CLAMP_TO_EDGE);
  }
- return {reset,show(source){if(!visible&&!pending){pending=source;buttons.clear();timer.reset();}},toggle(source){if(visible||pending){reset();}else{pending=source;timer.reset();}},
+ return {reset,show(source){if(!disposed&&!visible&&!pending){pending=source;buttons.clear();timer.reset();}},toggle(source){if(disposed)return;if(visible||pending){reset();}else{pending=source;timer.reset();}},
  update(session,time,frame,referenceSpace,viewer){
+  if(disposed)return;
   if(session.visibilityState&&session.visibilityState!=='visible'){reset();return;}
   const sources=Array.from(session.inputSources||[]).filter(s=>['left','right'].includes(s.handedness)&&s.targetRaySpace&&!s.hand&&s.gamepad?.mapping==='xr-standard'&&s.gamepad.connected!==false);
   if(pending){const pose=sources.includes(pending)&&getPose(frame,pending.targetRaySpace,referenceSpace);if(pose&&viewer){panel=placePanel(pose.transform.matrix,viewer);pending=null;visible=true;timer.reset();}else if(!sources.includes(pending)){pending=null;}}
@@ -181,12 +185,27 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
   if(timer.update(time,!browsing&&!!(state.advancing??state.playing),!!capture||browsing)){reset();}
  },
  draw(view){
-  if(!visible||!panel)return;
-  const old={program:gl.getParameter(gl.CURRENT_PROGRAM),buffer:gl.getParameter(gl.ARRAY_BUFFER_BINDING),active:gl.getParameter(gl.ACTIVE_TEXTURE),flip:gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL),depth:gl.isEnabled(gl.DEPTH_TEST),blend:gl.isEnabled(gl.BLEND),enabled:gl.getVertexAttrib(attribute,gl.VERTEX_ATTRIB_ARRAY_ENABLED),attribBuffer:gl.getVertexAttrib(attribute,gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING),size:gl.getVertexAttrib(attribute,gl.VERTEX_ATTRIB_ARRAY_SIZE),type:gl.getVertexAttrib(attribute,gl.VERTEX_ATTRIB_ARRAY_TYPE),normalized:gl.getVertexAttrib(attribute,gl.VERTEX_ATTRIB_ARRAY_NORMALIZED),stride:gl.getVertexAttrib(attribute,gl.VERTEX_ATTRIB_ARRAY_STRIDE),offset:gl.getVertexAttribOffset(attribute,gl.VERTEX_ATTRIB_ARRAY_POINTER)};
+  if(disposed||!visible||!panel)return;
+  const state=getState(),caption=xrClipCaption(state.playlist);
+  const old={program:gl.getParameter(gl.CURRENT_PROGRAM),buffer:gl.getParameter(gl.ARRAY_BUFFER_BINDING),active:gl.getParameter(gl.ACTIVE_TEXTURE),flip:gl.getParameter(gl.UNPACK_FLIP_Y_WEBGL),premultiply:gl.getParameter(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL),blendSrcRGB:gl.getParameter(gl.BLEND_SRC_RGB),blendDstRGB:gl.getParameter(gl.BLEND_DST_RGB),blendSrcAlpha:gl.getParameter(gl.BLEND_SRC_ALPHA),blendDstAlpha:gl.getParameter(gl.BLEND_DST_ALPHA),blendEquationRGB:gl.getParameter(gl.BLEND_EQUATION_RGB),blendEquationAlpha:gl.getParameter(gl.BLEND_EQUATION_ALPHA),depth:gl.isEnabled(gl.DEPTH_TEST),blend:gl.isEnabled(gl.BLEND),enabled:gl.getVertexAttrib(attribute,gl.VERTEX_ATTRIB_ARRAY_ENABLED),attribBuffer:gl.getVertexAttrib(attribute,gl.VERTEX_ATTRIB_ARRAY_BUFFER_BINDING),size:gl.getVertexAttrib(attribute,gl.VERTEX_ATTRIB_ARRAY_SIZE),type:gl.getVertexAttrib(attribute,gl.VERTEX_ATTRIB_ARRAY_TYPE),normalized:gl.getVertexAttrib(attribute,gl.VERTEX_ATTRIB_ARRAY_NORMALIZED),stride:gl.getVertexAttrib(attribute,gl.VERTEX_ATTRIB_ARRAY_STRIDE),offset:gl.getVertexAttribOffset(attribute,gl.VERTEX_ATTRIB_ARRAY_POINTER)};
   gl.activeTexture(gl.TEXTURE0);const oldTexture=gl.getParameter(gl.TEXTURE_BINDING_2D);
-  try{paint(getState());gl.useProgram(program);gl.disable(gl.DEPTH_TEST);gl.disable(gl.BLEND);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(attribute);gl.vertexAttribPointer(attribute,2,gl.FLOAT,false,0,0);gl.bindTexture(gl.TEXTURE_2D,texture);gl.uniform1i(loc('panel'),0);
+  try{paint(state);gl.useProgram(program);gl.disable(gl.DEPTH_TEST);gl.disable(gl.BLEND);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.enableVertexAttribArray(attribute);gl.vertexAttribPointer(attribute,2,gl.FLOAT,false,0,0);gl.bindTexture(gl.TEXTURE_2D,texture);gl.uniform1i(loc('panel'),0);
   gl.uniform2f(loc('extent'),WIDTH/2,(panel.height||HEIGHT)/2);gl.uniformMatrix4fv(loc('projection'),false,view.projectionMatrix);gl.uniformMatrix4fv(loc('view'),false,view.transform.inverse.matrix);for(const n of ['center','right','up'])gl.uniform3fv(loc(n),panel[n]);gl.drawArrays(gl.TRIANGLES,0,6);
+  if(caption){
+   gl.bindTexture(gl.TEXTURE_2D,captionTexture);
+   const key=JSON.stringify(caption);
+   if(key!==lastCaption){
+    paintClipCaption(captionCtx,caption);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,false);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,captionCanvas);
+    for(const name of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,name,gl.LINEAR);
+    for(const name of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,name,gl.CLAMP_TO_EDGE);
+    lastCaption=key;
+   }
+   gl.enable(gl.BLEND);gl.blendEquationSeparate(gl.FUNC_ADD,gl.FUNC_ADD);gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
+   gl.uniform2f(loc('extent'),WIDTH/2,CAPTION_WORLD_HEIGHT/2);gl.uniform3fv(loc('center'),clipCaptionCenter(panel,panel.height||HEIGHT));gl.drawArrays(gl.TRIANGLES,0,6);
+  }else{lastCaption='';}
   }finally{if(old.attribBuffer){gl.bindBuffer(gl.ARRAY_BUFFER,old.attribBuffer);gl.vertexAttribPointer(attribute,old.size,old.type,old.normalized,old.stride,old.offset);}if(!old.enabled)gl.disableVertexAttribArray(attribute);
-  gl.bindBuffer(gl.ARRAY_BUFFER,old.buffer);gl.bindTexture(gl.TEXTURE_2D,oldTexture);gl.activeTexture(old.active);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,old.flip);if(old.depth)gl.enable(gl.DEPTH_TEST);if(old.blend)gl.enable(gl.BLEND);gl.useProgram(old.program);}
- },dispose(){reset();gl.deleteTexture(texture);gl.deleteBuffer(buffer);gl.deleteProgram(program);}};
+  gl.bindBuffer(gl.ARRAY_BUFFER,old.buffer);gl.bindTexture(gl.TEXTURE_2D,oldTexture);gl.activeTexture(old.active);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,old.flip);gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL,old.premultiply);gl.blendFuncSeparate(old.blendSrcRGB,old.blendDstRGB,old.blendSrcAlpha,old.blendDstAlpha);gl.blendEquationSeparate(old.blendEquationRGB,old.blendEquationAlpha);if(old.depth)gl.enable(gl.DEPTH_TEST);if(old.blend)gl.enable(gl.BLEND);else gl.disable(gl.BLEND);gl.useProgram(old.program);}
+ },dispose(){if(disposed)return;disposed=true;reset();captionCanvas.width=0;gl.deleteTexture(captionTexture);gl.deleteTexture(texture);gl.deleteBuffer(buffer);gl.deleteProgram(program);}};
 }

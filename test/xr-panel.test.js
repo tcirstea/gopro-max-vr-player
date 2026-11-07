@@ -24,7 +24,8 @@ test('auto-hide counts two seconds only while playing, holds during interaction 
 });
 function harness(t){
  const descriptor=Object.getOwnPropertyDescriptor(globalThis,'document');t.after(()=>descriptor?Object.defineProperty(globalThis,'document',descriptor):delete globalThis.document);
- const ctx=new Proxy({},{get:(obj,key)=>key in obj?obj[key]:()=>{}});globalThis.document={createElement:()=>({getContext:()=>ctx})};
+ const context=()=>new Proxy({measureText:text=>({width:Array.from(text).length*14})},{get:(obj,key)=>key in obj?obj[key]:()=>{}});
+ const ctx=context(),captionCtx=context(),canvases=[];globalThis.document={createElement:()=>{const canvas={getContext:()=>canvases.indexOf(canvas)===0?ctx:captionCtx};canvases.push(canvas);return canvas;}};
  const gl=new Proxy({getShaderParameter:()=>true,getProgramParameter:()=>true},{get:(obj,key)=>key in obj?obj[key]:/^[A-Z_0-9]+$/.test(key)?key:()=>({})});
  const actions=[],state={mediaId:1,canPlay:true,canSeek:true,canPrevious:true,canNext:true,canMute:true,muted:true,playing:false,duration:100,currentTime:20};
  const left={handedness:'left',targetRaySpace:{},gamepad:{mapping:'xr-standard',buttons:[{pressed:false}]}};
@@ -35,7 +36,7 @@ function harness(t){
  const tick=()=>panel.update(session,time+=16,frame,{},identity());
  const aim=(source,u,v)=>{const ray=identity();ray[12]=(u-.5)*1.2;ray[13]=(.5-v)*.375;rays.set(source.targetRaySpace,ray);};
  const trigger=(source,down)=>{source.gamepad.buttons[0].pressed=down;tick();};
- panel.toggle(right);tick();return {panel,tick,aim,trigger,left,right,session,state,actions,rays,gl,ctx};
+ panel.toggle(right);tick();return {panel,tick,aim,trigger,left,right,session,state,actions,rays,gl,ctx,captionCtx,canvases};
 }
 test('either hand can activate transport with trigger press/release; held button never repeats',t=>{
  const h=harness(t);h.aim(h.left,.312,.25);h.trigger(h.left,true);h.tick();assert.deepEqual(h.actions,[]);h.trigger(h.left,false);assert.deepEqual(h.actions,[['play',undefined]]);
@@ -63,7 +64,7 @@ test('holding trigger on initial appearance requires release before selection',t
 
 test('panel draw restores panorama GPU bindings even if texture painting fails',t=>{
  const h=harness(t),g=h.gl;
- const parameters={CURRENT_PROGRAM:'panorama',ARRAY_BUFFER_BINDING:'quad',ACTIVE_TEXTURE:'TEXTURE1',UNPACK_FLIP_Y_WEBGL:true,TEXTURE_BINDING_2D:'video'};
+ const parameters={CURRENT_PROGRAM:'panorama',ARRAY_BUFFER_BINDING:'quad',ACTIVE_TEXTURE:'TEXTURE1',UNPACK_FLIP_Y_WEBGL:true,UNPACK_PREMULTIPLY_ALPHA_WEBGL:true,TEXTURE_BINDING_2D:'video'};
  g.getParameter=name=>parameters[name];g.getVertexAttrib=(index,name)=>({VERTEX_ATTRIB_ARRAY_ENABLED:true,VERTEX_ATTRIB_ARRAY_BUFFER_BINDING:'quad',VERTEX_ATTRIB_ARRAY_SIZE:2,VERTEX_ATTRIB_ARRAY_TYPE:'FLOAT',VERTEX_ATTRIB_ARRAY_NORMALIZED:false,VERTEX_ATTRIB_ARRAY_STRIDE:0}[name]);g.getVertexAttribOffset=()=>0;g.isEnabled=()=>true;
  g.activeTexture=value=>parameters.ACTIVE_TEXTURE=value;g.bindTexture=(target,value)=>parameters.TEXTURE_BINDING_2D=value;g.bindBuffer=(target,value)=>parameters.ARRAY_BUFFER_BINDING=value;g.useProgram=value=>parameters.CURRENT_PROGRAM=value;g.pixelStorei=(name,value)=>parameters[name]=value;
  const original={...parameters};h.panel.draw({projectionMatrix:identity(),transform:{inverse:{matrix:identity()}}});assert.deepEqual(parameters,original);
@@ -275,5 +276,75 @@ test('VR reorder, playback changes and replacement queues cancel held item selec
   if(change==='replace')h.state.playlist.items=Array.from({length:15},(_,id)=>({id:`new:${id}`,name:'duplicate.mp4'}));
   h.trigger(h.right,false);assert.deepEqual(h.actions,[],change);
   h.trigger(h.right,true);h.trigger(h.right,false);assert.equal(h.actions.length,1,change);
+ }
+});
+
+const rounded=value=>JSON.parse(JSON.stringify(value,(_,item)=>typeof item==='number'?Math.round(item*1e8)/1e8:item));
+const captionView={projectionMatrix:identity(),transform:{inverse:{matrix:identity()}}};
+function currentCaption(h){
+ const labels=[];h.captionCtx.fillText=text=>labels.push(text);h.panel.draw(captionView);return labels;
+}
+test('VR caption refreshes current metadata asynchronously without moving controls or reuploading each eye/frame',t=>{
+ const h=harness(t),uploads=[],uniforms=[],buttons=[];
+ h.gl.texImage2D=(...args)=>uploads.push(args.at(-1));h.gl.getUniformLocation=(_,name)=>name;
+ h.gl.uniform3fv=(name,value)=>uniforms.push([name,Array.from(value)]);h.gl.uniform2f=(name,...value)=>uniforms.push([name,value]);
+ h.ctx.fillRect=(...args)=>buttons.push(args);
+ h.state.playlist={items:[{id:'a',name:'a.360',metadataDone:false},{id:'b',name:'b.360',metadataDone:false}],selectedId:'a'};
+ assert.deepEqual(currentCaption(h),['a.360','Reading file date…']);
+ assert.deepEqual(uploads.map(c=>[c.width,c.height]),[[1024,320],[1024,96]]);
+ assert.ok(buttons.some(r=>JSON.stringify(r)===JSON.stringify([0,0,1024,320])));
+ assert.deepEqual(rounded(uniforms.filter(x=>x[0]==='extent')),[['extent',[.6,.1875]],['extent',[.6,.05625]]]);
+ const centers=uniforms.filter(x=>x[0]==='center');assert.deepEqual(centers[0][1],[0,0,-1.6]);assert.deepEqual(rounded(centers[1][1]),[0,.25575,-1.6]);
+ h.panel.draw(captionView);h.state.currentTime++;h.panel.draw(captionView);
+ assert.equal(uploads.filter(c=>c===h.canvases[1]).length,1,'stereo/time update reuse caption texture');
+ h.state.playlist.items[0].dateTaken=Date.UTC(2024,3,15,12);h.state.playlist.items[0].metadataDone=true;
+ assert.deepEqual(currentCaption(h),['a.360','File date: 2024-04-15 12:00:00 · timezone unverified']);
+ h.state.playlist.selectedId='b';assert.deepEqual(currentCaption(h),['b.360','Reading file date…']);
+ h.state.playlist.items[0].dateTaken=Date.UTC(2023,0,1);assert.deepEqual(currentCaption(h),[],'late old-clip metadata cannot replace caption');
+ h.state.playlist.items[1].metadataDone=true;assert.deepEqual(currentCaption(h),['b.360','Date unavailable']);
+ h.aim(h.right,.312,.25);h.trigger(h.right,true);h.trigger(h.right,false);assert.equal(h.actions.at(-1)[0],'play','original ray target unchanged');
+});
+
+test('caption follows playlist top but does not enlarge the clickable surface',t=>{
+ const h=harness(t),centers=[];h.state.playlist={items:[{id:1,name:'clip.360',metadataDone:true}],selectedId:1};
+ h.gl.getUniformLocation=(_,name)=>name;h.gl.uniform3fv=(name,value)=>{if(name==='center')centers.push(Array.from(value));};
+ const click=openPlaylist(h);assert.deepEqual(currentCaption(h),['clip.360','Date unavailable']);
+ assert.deepEqual(rounded(centers),[ [0,0,-1.6], [0,.51825,-1.6] ]);
+ click(.1,.11);centers.length=0;h.panel.draw(captionView);assert.deepEqual(rounded(centers),[ [0,0,-1.6], [0,.25575,-1.6] ]);
+ h.aim(h.right,.3,-.18);h.trigger(h.right,true);assert.equal(panelVisible(h),false,'caption remains non-interactive and outside the original panel');
+});
+
+test('caption disappears for demo, auto-hide, focus loss, reset, selection and disposal',t=>{
+ for(const stop of ['demo','timer','focus','reset','selection','dispose']){
+  const h=harness(t);h.state.playlist={items:[{id:1,name:'clip.360'}],selectedId:1};currentCaption(h);
+  const draws=[];h.gl.drawArrays=()=>draws.push(1);
+  if(stop==='demo')h.state.playlist={items:[]};
+  if(stop==='timer'){h.state.playing=true;h.aim(h.right,2,.5);h.aim(h.left,2,.5);for(let i=0;i<150;i++)h.tick();}
+  if(stop==='focus'){h.session.visibilityState='hidden';h.tick();}
+  if(stop==='reset')h.panel.reset();
+  if(stop==='selection'){const click=openPlaylist(h);click(.1,.32);}
+  if(stop==='dispose'){
+   const deleted=[];h.gl.deleteTexture=t=>deleted.push(t);h.panel.dispose();h.panel.dispose();assert.equal(deleted.length,2);assert.equal(h.canvases[1].width,0);
+   h.panel.show(h.right);h.panel.toggle(h.right);h.tick();
+  }
+  h.panel.draw(captionView);assert.equal(draws.length,stop==='demo'?1:0,stop);
+ }
+});
+
+test('transparent caption preserves GL blend/unpack state on draw, upload failure and draw failure',t=>{
+ const h=harness(t),g=h.gl;h.state.playlist={items:[{id:1,name:'clip.360'}],selectedId:1};
+ const parameters={CURRENT_PROGRAM:'old',ARRAY_BUFFER_BINDING:'quad',ACTIVE_TEXTURE:'TEXTURE1',TEXTURE_BINDING_2D:'video',UNPACK_FLIP_Y_WEBGL:true,UNPACK_PREMULTIPLY_ALPHA_WEBGL:true,BLEND_SRC_RGB:2,BLEND_DST_RGB:3,BLEND_SRC_ALPHA:4,BLEND_DST_ALPHA:5,BLEND_EQUATION_RGB:6,BLEND_EQUATION_ALPHA:7};
+ const enabled={BLEND:false,DEPTH_TEST:true};g.getParameter=name=>parameters[name];g.isEnabled=name=>enabled[name];
+ g.enable=name=>enabled[name]=true;g.disable=name=>enabled[name]=false;
+ g.activeTexture=value=>parameters.ACTIVE_TEXTURE=value;g.bindTexture=(_,value)=>parameters.TEXTURE_BINDING_2D=value;g.bindBuffer=(_,value)=>parameters.ARRAY_BUFFER_BINDING=value;g.useProgram=value=>parameters.CURRENT_PROGRAM=value;g.pixelStorei=(name,value)=>parameters[name]=value;
+ g.blendFuncSeparate=(...values)=>['BLEND_SRC_RGB','BLEND_DST_RGB','BLEND_SRC_ALPHA','BLEND_DST_ALPHA'].forEach((key,i)=>parameters[key]=values[i]);
+ g.blendEquationSeparate=(rgb,alpha)=>{parameters.BLEND_EQUATION_RGB=rgb;parameters.BLEND_EQUATION_ALPHA=alpha;};
+ const original={...parameters};
+ for(const failure of [null,'upload','draw']){
+  h.state.playlist.items[0].name=String(failure);
+  g.texImage2D=(...args)=>{if(failure==='upload'&&args.at(-1)===h.canvases[1])throw Error('caption upload');};
+  g.drawArrays=()=>{if(enabled.BLEND){assert.equal(parameters.BLEND_SRC_RGB,g.SRC_ALPHA);assert.equal(parameters.BLEND_DST_RGB,g.ONE_MINUS_SRC_ALPHA);if(failure==='draw')throw Error('caption draw');}};
+  if(failure)assert.throws(()=>h.panel.draw(captionView),new RegExp('caption '+failure));else h.panel.draw(captionView);
+  assert.deepEqual(parameters,original);assert.deepEqual(enabled,{BLEND:false,DEPTH_TEST:true});
  }
 });

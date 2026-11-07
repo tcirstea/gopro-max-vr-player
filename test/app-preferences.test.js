@@ -89,6 +89,6 @@ test('desktop mirror is explicit session-only opt-in and follows renderer state/
 test('mirror UI explains monitor visibility, costs and standalone limits and retains browser VR exit/fullscreen',()=>{
  const html=readFileSync(new URL('../index.html',import.meta.url),'utf8'),css=readFileSync(new URL('../src/style.css',import.meta.url),'utf8');
  const input=html.match(/<input id="desktop-mirror"[^>]*>/)[0];assert.doesNotMatch(input,/checked/);assert.match(input,/aria-describedby="desktop-mirror-note"/);assert.match(input,/autocomplete="off"/);
- assert.match(html,/Anyone viewing this screen can see the video and any open VR playlist/);assert.match(html,/GPU load/);assert.match(html,/No casting or uploads/);assert.match(html,/Standalone Quest does not send this view to a separate computer/);
+ assert.match(html,/Anyone viewing this screen can see the video, the current filename and file date when VR controls are visible, and any open VR playlist/);assert.match(html,/GPU load/);assert.match(html,/No casting or uploads/);assert.match(html,/Standalone Quest does not send this view to a separate computer/);
  assert.match(css,/\.xr-mirror-active \.viewer-bottom>div/);assert.doesNotMatch(css,/\.xr-mirror-active \.viewer-bottom[,\{]/);
 });
