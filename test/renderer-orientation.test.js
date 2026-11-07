@@ -12,9 +12,9 @@ test('renderer applies per-frame correction to shader and listener, preserving p
   const renderer=createRenderer(canvas);let orientation;
   const unsubscribe=renderer.onViewOrientation(matrix=>orientation=Array.from(matrix));const q=[Math.SQRT1_2,0,Math.SQRT1_2,0],frame={width:4096,height:1344};
   renderer.setMaxSources(frame,frame,{stabilization:q});next();near(uniforms.stabilization,quaternionMatrix(q));near(orientation,quaternionMatrix(q));
-  events.keydown({key:'ArrowLeft',preventDefault(){}});next();near(orientation,multiplyMatrix3(quaternionMatrix(q),viewRotationMatrix(.1,0)));
+  events.pointerdown({pointerId:1,clientX:0,clientY:0});events.pointermove({pointerId:1,clientX:25,clientY:0});events.pointerup({pointerId:1});next();near(orientation,multiplyMatrix3(quaternionMatrix(q),viewRotationMatrix(.1,0)));
   renderer.reset();renderer.setSource(null);next();near(uniforms.stabilization,quaternionMatrix([1,0,0,0]));near(orientation,quaternionMatrix([1,0,0,0]));
-  const retained=orientation;unsubscribe();events.keydown({key:'ArrowLeft',preventDefault(){}});next();assert.equal(orientation,retained);
+  const retained=orientation;unsubscribe();events.pointerdown({pointerId:1,clientX:0,clientY:0});events.pointermove({pointerId:1,clientX:25,clientY:0});events.pointerup({pointerId:1});next();assert.equal(orientation,retained);
  }finally{Object.assign(globalThis,saved);}
 });
 test('XR view matrix preserves three-axis pose rotation before source stabilization',()=>{
@@ -28,7 +28,7 @@ test('active window/XR frame loop advances media before drawing without duplicat
  const saved=Object.fromEntries(keys.map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
  const steps=[],canvasEvents={},sessionEvents={};let windowFrame,xrFrame;
  const gl=new Proxy({getShaderParameter:()=>true,getProgramParameter:()=>true,getParameter:()=>8192,isContextLost:()=>false,getUniformLocation:(_p,name)=>name,drawArrays:()=>steps.push('draw')},{get:(target,key)=>key in target?target[key]:/^[A-Z_0-9]+$/.test(key)?1:()=>({})});
- const canvas={clientWidth:400,clientHeight:300,getContext:()=>gl,addEventListener:(name,cb)=>canvasEvents[name]=cb,dispatchEvent(event){canvasEvents[event.type]?.(event);}};
+ const canvas={clientWidth:400,clientHeight:300,getContext:()=>gl,focus(){},setPointerCapture(){},addEventListener:(name,cb)=>canvasEvents[name]=cb,dispatchEvent(event){canvasEvents[event.type]?.(event);}};
  const session={renderState:{},async requestReferenceSpace(){return {};},updateRenderState(state){Object.assign(this.renderState,state);},addEventListener(name,cb){sessionEvents[name]=cb;},requestAnimationFrame(cb){xrFrame=cb;return 1;},async end(){sessionEvents.end?.();}};
  const globals={requestAnimationFrame:cb=>{windowFrame=cb;return 1;},document:{getElementById:()=>null},navigator:{xr:{async requestSession(){return session;}}},XRWebGLLayer:class{getViewport(){return {x:0,y:0,width:400,height:300};}}};
  for(const [key,value] of Object.entries(globals))Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});
@@ -50,7 +50,7 @@ test('XR controller zoom reaches shader FOV and transport events while desktop w
  const saved=Object.fromEntries(keys.map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
  const events={},sessionEvents={},uniforms={},dispatched=[];let windowFrame,xrFrame,fragment;
  const gl=new Proxy({getShaderParameter:()=>true,getProgramParameter:()=>true,getParameter:()=>8192,isContextLost:()=>false,getUniformLocation:(_p,name)=>name,uniform1f:(name,value)=>uniforms[name]=value,shaderSource:(_s,source)=>{if(source.includes('eyeRay'))fragment=source;}},{get:(target,key)=>key in target?target[key]:/^[A-Z_0-9]+$/.test(key)?1:()=>({})});
- const canvas={clientWidth:400,clientHeight:300,getContext:()=>gl,addEventListener:(name,cb)=>events[name]=cb,dispatchEvent(event){dispatched.push(event);events[event.type]?.(event);}};
+ const canvas={clientWidth:400,clientHeight:300,getContext:()=>gl,focus(){},setPointerCapture(){},addEventListener:(name,cb)=>events[name]=cb,dispatchEvent(event){dispatched.push(event);events[event.type]?.(event);}};
  const input={handedness:'right',gamepad:{mapping:'xr-standard',axes:[0,0,0,0],buttons:Array.from({length:5},()=>({pressed:false}))}};
  const session={visibilityState:'visible',inputSources:[input],renderState:{},async requestReferenceSpace(){return {};},updateRenderState(state){Object.assign(this.renderState,state);},addEventListener(name,cb){sessionEvents[name]=cb;},requestAnimationFrame(cb){xrFrame=cb;return 1;},async end(){sessionEvents.end?.();}};
  const globals={requestAnimationFrame:cb=>{windowFrame=cb;return 1;},document:{getElementById:()=>null},navigator:{xr:{async requestSession(){return session;}}},XRWebGLLayer:class{getViewport(){return {x:0,y:0,width:400,height:300};}}};
@@ -72,7 +72,7 @@ test('explicit view reset neutralizes full pose; stick click resets only zoom an
  const saved=Object.fromEntries(keys.map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
  const events={},sessionEvents={},uniforms={};let xrFrame,windowFrame,orientation;
  const gl=new Proxy({getShaderParameter:()=>true,getProgramParameter:()=>true,getParameter:()=>8192,isContextLost:()=>false,getUniformLocation:(_p,name)=>name,uniform1f:(name,value)=>uniforms[name]=value,uniformMatrix3fv:(name,_transpose,value)=>uniforms[name]=Array.from(value)},{get:(target,key)=>key in target?target[key]:/^[A-Z_0-9]+$/.test(key)?1:()=>({})});
- const canvas={clientWidth:400,clientHeight:300,getContext:()=>gl,addEventListener:(name,cb)=>events[name]=cb,dispatchEvent(event){events[event.type]?.(event);}};
+ const canvas={clientWidth:400,clientHeight:300,getContext:()=>gl,focus(){},setPointerCapture(){},addEventListener:(name,cb)=>events[name]=cb,dispatchEvent(event){events[event.type]?.(event);}};
  const input={handedness:'right',gamepad:{mapping:'xr-standard',axes:[0,0,0,0],buttons:Array.from({length:5},()=>({pressed:false}))}};
  const session={visibilityState:'visible',inputSources:[input],renderState:{},async requestReferenceSpace(){return {};},updateRenderState(state){Object.assign(this.renderState,state);},addEventListener(name,cb){sessionEvents[name]=cb;},requestAnimationFrame(cb){xrFrame=cb;return 1;},async end(){sessionEvents.end?.();}};
  const globals={requestAnimationFrame:cb=>{windowFrame=cb;return 1;},document:{getElementById:()=>null},navigator:{xr:{async requestSession(){return session;}}},XRWebGLLayer:class{getViewport(){return {x:0,y:0,width:400,height:300};}}};
@@ -83,7 +83,7 @@ test('explicit view reset neutralizes full pose; stick click resets only zoom an
  const frame={getViewerPose:()=>pose?{transform:{matrix:pose},views:[{projectionMatrix:matrix,transform:{matrix:pose}}]}:null};
  try{
   const renderer=createRenderer(canvas);renderer.onViewOrientation(r=>orientation=Array.from(r));
-  events.keydown({key:'ArrowLeft',preventDefault(){}});events.wheel({deltaY:-300,preventDefault(){}});
+  events.pointerdown({pointerId:1,clientX:0,clientY:0});events.pointermove({pointerId:1,clientX:25,clientY:0});events.pointerup({pointerId:1});events.wheel({deltaY:-300,preventDefault(){}});
   await renderer.enterVR();xrFrame(0,frame);assert.notEqual(uniforms.fov,Math.PI/2);
   // Tracking loss defers explicit full view reset until a pose is available.
   const original=pose;pose=null;renderer.reset();xrFrame(20,frame);
@@ -110,14 +110,14 @@ test('explicit view reset neutralizes full pose; stick click resets only zoom an
   controller=poseFor(quaternionMatrix([Math.cos(.2),0,0,Math.sin(.2)]));controller[12]=controller[13]=controller[14]=0;xrFrame(220,frame);
   assert.notDeepEqual(uniforms.xrCenter,gripCenter);near(orientation,multiplyMatrix3(uniforms.xrCenter,viewRotationMatrix(0,0,pose)));assert.equal(uniforms.fov,gripFov);
   // Stick click only restores default zoom, even with pan, roll correction, and grip held.
-  events.keydown({key:'ArrowLeft',preventDefault(){}});events.keydown({key:'ArrowUp',preventDefault(){}});events.wheel({deltaY:-250,preventDefault(){}});xrFrame(225,frame);
+  events.pointerdown({pointerId:1,clientX:0,clientY:0});events.pointermove({pointerId:1,clientX:25,clientY:0});events.pointerup({pointerId:1});events.keydown({key:'ArrowUp',preventDefault(){}});events.wheel({deltaY:-250,preventDefault(){}});xrFrame(225,frame);
   const beforeClick={center:uniforms.xrCenter.slice(),orientation:orientation.slice(),yaw:uniforms.yaw,pitch:uniforms.pitch};assert.notEqual(uniforms.fov,Math.PI/2);assert.notEqual(uniforms.yaw,0);assert.notEqual(uniforms.pitch,0);
   input.gamepad.buttons[3].pressed=true;xrFrame(226,frame);assert.equal(uniforms.fov,Math.PI/2);assert.equal(uniforms.yaw,beforeClick.yaw);assert.equal(uniforms.pitch,beforeClick.pitch);near(uniforms.xrCenter,beforeClick.center);near(orientation,beforeClick.orientation);
   // A held click does not repeatedly reset, and original drag anchor is still used.
   events.wheel({deltaY:-100,preventDefault(){}});xrFrame(227,frame);assert.equal(uniforms.fov,Math.PI/2-.1);
   controller=matrix.slice();xrFrame(228,frame);near(uniforms.xrCenter,gripCenter);
   controller=poseFor(quaternionMatrix([Math.cos(.2),0,0,Math.sin(.2)]));controller[12]=controller[13]=controller[14]=0;xrFrame(229,frame);near(uniforms.xrCenter,beforeClick.center);
-  input.gamepad.buttons[3].pressed=false;events.keydown({key:'ArrowRight',preventDefault(){}});events.keydown({key:'ArrowDown',preventDefault(){}});xrFrame(230,frame);
+  input.gamepad.buttons[3].pressed=false;events.pointerdown({pointerId:1,clientX:0,clientY:0});events.pointermove({pointerId:1,clientX:-25,clientY:0});events.pointerup({pointerId:1});events.keydown({key:'ArrowDown',preventDefault(){}});xrFrame(230,frame);
   const draggedCenter=uniforms.xrCenter.slice(),releasedOrientation=orientation.slice();input.gamepad.buttons[1].pressed=false;xrFrame(240,frame);near(orientation,releasedOrientation);near(uniforms.xrCenter,draggedCenter);
   pose=gripStart;xrFrame(260,frame);near(orientation,multiplyMatrix3(draggedCenter,viewRotationMatrix(0,0,pose)));near(uniforms.xrCenter,draggedCenter);
   // Recenter while held replaces the controller anchor; moving only the head does not cancel normal tracking.

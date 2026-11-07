@@ -11,11 +11,12 @@ function harness(count=15){
   setAttribute(k,v){this.attrs[k]=v;}
   append(...nodes){this.children.push(...nodes);}
   replaceChildren(...nodes){this.children=nodes;}
-  focus(){document.activeElement=this;}
+  focus(options){document.activeElement=this;this.focusOptions=options;}
+  scrollIntoView(options){this.scrollOptions=options;this.scrollCalls=(this.scrollCalls||0)+1;}
   getContext(){this.draws??=[];this.labels??=[];return {fillRect(){},fillText:(...args)=>this.labels.push(args),drawImage:(...args)=>this.draws.push(args)};}
   showModal(){this.open=true;}
   close(){this.open=false;}
-  getBoundingClientRect(){return {left:10,right:100,top:10,bottom:100};}
+  getBoundingClientRect(){return this.bounds||{left:10,right:100,top:10,bottom:100};}
   click(){this.handlers.click?.({target:this});}
  }
  const el=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
@@ -31,9 +32,10 @@ test('desktop playlist pages, toggles grid, sorts real state and keeps filenames
  const h=harness();h.browser.open();assert.equal(h.el('playlist-items').children.length,12);
  const first=h.el('playlist-items').children[0];assert.equal(first.children[1].children[0].textContent,'1. <img src=x onerror=alert(1)>');assert.equal(first.attrs['aria-current'],'true');
  h.el('playlist-page-next').click();assert.equal(h.el('playlist-items').children.length,3);
- h.el('playlist-layout').click();assert.equal(h.el('playlist-items').className,'playlist-grid');assert.equal(h.el('playlist-items').children.length,12);
+ h.el('playlist-layout').click();assert.equal(h.el('playlist-items').className,'playlist-grid');assert.equal(h.el('playlist-items').children.length,3);
  h.el('playlist-sort').handlers.change({target:{value:'size'}});h.el('playlist-direction').click();assert.equal(h.state.items[0].added,15);
- h.el('playlist-items').children[0].click();assert.deepEqual(h.selected,['1:14']);assert.equal(h.el('playlist-window').open,false);
+ assert.ok(h.el('playlist-items').children.some(node=>node.attrs['aria-current']==='true'));
+ h.el('playlist-items').children[0].click();assert.deepEqual(h.selected,['1:2']);assert.equal(h.el('playlist-window').open,false);
  delete globalThis.document;
 });
 test('close and reopen, thumbnail repaint focus, shrinking queue and backdrop dismissal are safe',()=>{
@@ -90,5 +92,65 @@ test('double-height list rows repaginate, retain focus and leave grid layout unc
  h.el('playlist-layout').click();assert.equal(h.el('playlist-items').children.length,6);
  h.browser.close();h.browser.open();assert.equal(h.el('playlist-items').className,'playlist-list playlist-large-rows');
  h.el('playlist-page-next').click();h.el('playlist-items').children[0].click();assert.deepEqual(h.selected,['1:6']);
+ delete globalThis.document;
+});
+
+test('desktop opens and reopens on current video in either layout and row density',()=>{
+ const h=harness(40),visible=()=>h.el('playlist-items').children;
+ for(const large of [false,true])for(const grid of [false,true]){
+  h.browser.close();h.state.doubleHeightRows=large;h.state.selectedId='1:29';h.browser.open();
+  if((h.el('playlist-items').className==='playlist-grid')!==grid)h.el('playlist-layout').click();
+  // Opening recomputes from playback using the saved layout, not a stale page.
+  h.browser.close();h.browser.open();assert.ok(visible().some(n=>n.dataset.clipId==='1:29'&&n.attrs['aria-current']==='true'));
+  h.el('playlist-page-back').click();h.browser.open();assert.ok(!visible().some(n=>n.dataset.clipId==='1:29'),'already open must not steal manual browsing');
+  h.browser.close();h.state.selectedId='1:38';h.browser.open();assert.ok(visible().some(n=>n.dataset.clipId==='1:38'));
+ }
+ delete globalThis.document;
+});
+test('desktop layout and density round trips retain the original anchor instead of walking backwards',()=>{
+ const h=harness(40),ids=()=>h.el('playlist-items').children.map(n=>n.dataset.clipId);
+ h.state.doubleHeightRows=true;h.state.selectedId='1:20';h.browser.open();assert.equal(ids()[0],'1:18');
+ for(let n=0;n<3;n++){
+  h.el('playlist-layout').click();assert.ok(ids().includes('1:18'));assert.equal(ids()[0],'1:12');
+  h.el('playlist-layout').click();assert.equal(ids()[0],'1:18');
+  h.state.doubleHeightRows=false;h.browser.render();assert.ok(ids().includes('1:18'));
+  h.state.doubleHeightRows=true;h.browser.render();assert.equal(ids()[0],'1:18');
+ }
+ h.el('playlist-page-next').click();assert.equal(ids()[0],'1:24');
+ h.state.version++;h.browser.render();assert.equal(ids()[0],'1:24','thumbnail repaint must not jump to playing item');
+ delete globalThis.document;
+});
+test('desktop follows stable current ID through explicit sorting, playback changes and replacement queues',()=>{
+ const h=harness(31),ids=()=>h.el('playlist-items').children.map(n=>n.dataset.clipId);
+ h.state.items.forEach(item=>item.name='duplicate.mp4');h.state.selectedId='1:22';h.browser.open();
+ h.el('playlist-sort').handlers.change({target:{value:'size'}});h.el('playlist-direction').click();assert.ok(ids().includes('1:22'));
+ h.state.selectedId='1:0';h.browser.render();assert.ok(ids().includes('1:0'));
+ h.state.items=createPlaylistEntries(Array.from({length:15},()=>({name:'duplicate.mp4',size:1})),2);h.state.selectedId='2:14';h.state.version++;h.browser.render();assert.ok(ids().includes('2:14'));
+ h.state.items=[];h.state.selectedId=undefined;h.state.version++;h.browser.render();assert.equal(ids().length,0);assert.equal(h.el('playlist-page').textContent,'0 videos · Page 1 / 1');
+ h.browser.close();h.browser.open();assert.equal(ids().length,0);
+ delete globalThis.document;
+});
+
+test('desktop scrolls current clip into view on every reopen, and page navigation reveals its first row',()=>{
+ const h=harness(31),rows=()=>h.el('playlist-items').children;
+ h.state.selectedId='1:22';h.browser.open();let selected=rows().find(n=>n.dataset.clipId==='1:22');assert.deepEqual(selected.scrollOptions,{block:'nearest'});
+ h.el('playlist-window').scrollTop=800;h.browser.close();h.browser.open();assert.equal(selected.scrollCalls,2,'reopening an unchanged page still reveals current video');
+ h.el('playlist-page-next').click();assert.equal(rows()[0].dataset.clipId,'1:24');assert.deepEqual(rows()[0].scrollOptions,{block:'nearest'});
+ h.el('playlist-page-back').click();assert.equal(rows()[0].dataset.clipId,'1:12');assert.deepEqual(rows()[0].scrollOptions,{block:'nearest'});
+ h.state.selectedId='1:23';h.browser.render();selected=rows().find(n=>n.dataset.clipId==='1:23');assert.deepEqual(selected.scrollOptions,{block:'nearest'});
+ selected.focus();h.el('playlist-window').scrollTop=777;h.state.version++;h.browser.render();
+ assert.equal(h.el('playlist-window').scrollTop,777);assert.deepEqual(h.document.activeElement.focusOptions,{preventScroll:true});assert.equal(h.document.activeElement.scrollCalls,undefined,'metadata alone must not scroll');
+ delete globalThis.document;
+});
+test('manual desktop scroll anchors the first viewport-visible clip on density/layout changes',()=>{
+ const h=harness(40),rows=()=>h.el('playlist-items').children;
+ h.state.selectedId='1:12';h.browser.open();h.el('playlist-window').bounds={top:0,bottom:400};
+ rows().forEach((node,index)=>node.bounds={top:(index-8)*150,bottom:(index-7)*150});
+ h.state.doubleHeightRows=true;h.browser.render();assert.equal(rows()[0].dataset.clipId,'1:18');
+ assert.deepEqual(rows().find(n=>n.dataset.clipId==='1:20').scrollOptions,{block:'nearest'});
+ for(let n=0;n<3;n++){
+  h.el('playlist-layout').click();assert.deepEqual(rows().find(n=>n.dataset.clipId==='1:20').scrollOptions,{block:'nearest'});
+  h.el('playlist-layout').click();assert.equal(rows()[0].dataset.clipId,'1:18');assert.deepEqual(rows().find(n=>n.dataset.clipId==='1:20').scrollOptions,{block:'nearest'});
+ }
  delete globalThis.document;
 });

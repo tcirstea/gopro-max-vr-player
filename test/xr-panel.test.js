@@ -1,4 +1,5 @@
 import {test} from 'node:test';
+import {createXRControls} from '../src/xr-controls.js';
 import assert from 'node:assert/strict';
 import {placePanel,panelHit,panelTarget,createPanelTimer,createXRPanel} from '../src/xr-panel.js';
 const identity=()=>[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];
@@ -176,4 +177,103 @@ test('VR filename, size and plain date occupy separate bounded lines in normal, 
   assert.ok(!labels.some(a=>/Embedded|Firmware|codec|unstitched/.test(a[0])));
  }
  labels.length=0;h.state.playlist.items[0].dateTaken=null;h.state.playlist.version++;h.panel.draw(view);assert.ok(labels.some(a=>a[0]==='Date unavailable'));
+});
+
+function panelVisible(h){
+ let draws=0;h.gl.drawArrays=()=>draws++;
+ h.panel.draw({projectionMatrix:identity(),transform:{inverse:{matrix:identity()}}});return draws>0;
+}
+function withControls(h){
+ let time=0;const controls=createXRControls({zoom(){},seek(){},togglePlayback(){},showPanel:source=>h.panel.show(source),togglePanel:source=>h.panel.toggle(source)});
+ const tick=()=>{controls.update(h.session,time+=16);h.tick();};
+ tick();return {controls,tick,press(source,down){source.gamepad.buttons[0].pressed=down;tick();}};
+}
+test('bumper opens, selects on-panel and dismisses away for either hand without held or duplicate polling reopens',t=>{
+ const h=harness(t),input=withControls(h);
+ for(const source of [h.left,h.right]){
+  h.panel.reset();h.rays.set(source.targetRaySpace,identity());
+  input.press(source,true);assert.equal(panelVisible(h),true);
+  h.aim(source,.312,.25);input.press(source,false);assert.equal(h.actions.length,source===h.left?0:1,'opening press cannot select');
+  input.press(source,true);input.press(source,false);assert.equal(h.actions.at(-1)[0],'play');
+  h.aim(source,2,.5);input.press(source,true);assert.equal(panelVisible(h),false);
+  input.tick();input.tick();assert.equal(panelVisible(h),false,'held dismissal must not reveal again');
+  input.press(source,false);input.press(source,true);assert.equal(panelVisible(h),true,'fresh press reopens');
+  input.press(source,false);
+ }
+ assert.equal(h.actions.length,2);
+});
+test('bumper on blank panel space or disabled controls does not dismiss',t=>{
+ const h=harness(t),input=withControls(h);h.state.canPlay=false;
+ for(const [u,v] of [[.5,.5],[.312,.25],[.02,.02]]){
+  h.aim(h.right,u,v);input.press(h.right,true);input.press(h.right,false);
+  assert.equal(panelVisible(h),true);assert.deepEqual(h.actions,[]);
+ }
+});
+test('away bumper dismisses the taller playlist, but blank playlist surface remains interactive',t=>{
+ const h=harness(t);h.state.playlist={items:[]};openPlaylist(h);const input=withControls(h);
+ h.aim(h.left,.5,.5+(.8-.5)*.9/.375);input.press(h.left,true);input.press(h.left,false);
+ assert.equal(panelVisible(h),true,'playlist bounds must use its taller surface');
+ h.aim(h.left,2,.5);input.press(h.left,true);assert.equal(panelVisible(h),false);assert.deepEqual(h.actions,[]);
+});
+test('other-hand away press cannot dismiss an active scrub and tracking loss is not an away aim',t=>{
+ const h=harness(t),input=withControls(h);
+ h.aim(h.right,.28,.65);input.press(h.right,true);h.aim(h.left,2,.5);input.press(h.left,true);
+ assert.equal(panelVisible(h),true);input.press(h.left,false);input.press(h.right,false);assert.equal(h.actions.at(-1)[0],'seek');
+ h.rays.delete(h.left.targetRaySpace);input.press(h.left,true);assert.equal(panelVisible(h),true);
+ h.aim(h.left,2,.5);input.tick();assert.equal(panelVisible(h),true,'tracking recovery while held must not dismiss');
+ input.press(h.left,false);input.press(h.left,true);assert.equal(panelVisible(h),false);
+});
+test('focus loss, reconnect and reset do not revive controls from a held dismissal press',t=>{
+ const h=harness(t),input=withControls(h);h.aim(h.right,2,.5);input.press(h.right,true);assert.equal(panelVisible(h),false);
+ h.session.visibilityState='hidden';input.tick();h.session.visibilityState='visible';input.tick();assert.equal(panelVisible(h),false);
+ h.session.inputSources=[];input.tick();h.session.inputSources=[h.left,h.right];input.tick();assert.equal(panelVisible(h),false);
+ input.controls.reset();h.panel.reset();input.tick();assert.equal(panelVisible(h),false);
+ input.press(h.right,false);input.press(h.right,true);assert.equal(panelVisible(h),true);
+});
+
+function playlistPaint(h){
+ const labels=[];h.ctx.fillText=text=>labels.push(text);
+ h.panel.draw({projectionMatrix:identity(),transform:{inverse:{matrix:identity()}}});
+ if(labels.length)h.lastPlaylistLabels=labels;return h.lastPlaylistLabels||[];
+}
+test('VR playlist opens on playing clip, preserves layout anchors without drift, and reopens at playback',t=>{
+ const h=harness(t);h.state.playlist={items:Array.from({length:40},(_,id)=>({id,name:`clip ${id}`})),selectedId:19,version:1};
+ const click=openPlaylist(h);assert.ok(playlistPaint(h).includes('clip 19'));assert.ok(playlistPaint(h).includes('Page 4 / 8'));
+ // List starts at clip 15. Grid must keep 15 visible, and repeated round trips
+ // must return to 15 rather than progressively moving to 10, 5 and 0.
+ for(let n=0;n<3;n++){
+  click(.4,.11);let labels=playlistPaint(h);assert.ok(labels.includes('clip 15'));assert.ok(labels.includes('Page 3 / 7'));
+  click(.4,.11);labels=playlistPaint(h);assert.ok(labels.includes('clip 15'));assert.ok(labels.includes('Page 4 / 8'));
+ }
+ click(.8,.94);assert.ok(playlistPaint(h).includes('clip 20'));
+ h.state.playlist.version++;assert.ok(playlistPaint(h).includes('clip 20'),'thumbnail updates preserve browsing');
+ click(.1,.11); // Back to transport, then reopen on currently playing clip.
+ openPlaylist(h);assert.ok(playlistPaint(h).includes('clip 19'));
+ h.panel.reset();h.rays.set(h.right.targetRaySpace,identity());h.panel.show(h.right);h.tick();
+ h.state.playlist.selectedId=38;openPlaylist(h);assert.ok(playlistPaint(h).includes('clip 38'));
+});
+test('VR double-height/grid round trips, sorting and current playback changes stay correctly paginated',t=>{
+ const h=harness(t);h.state.playlist={items:Array.from({length:31},(_,id)=>({id,name:`clip ${id}`})),selectedId:10,sort:'added',doubleHeightRows:true,version:1};
+ const click=openPlaylist(h);assert.ok(playlistPaint(h).includes('Page 6 / 16'));
+ for(let n=0;n<3;n++){
+  click(.4,.11);assert.ok(playlistPaint(h).includes('clip 10'));assert.ok(playlistPaint(h).includes('Page 2 / 6'));
+  click(.4,.11);assert.ok(playlistPaint(h).includes('clip 10'));assert.ok(playlistPaint(h).includes('Page 6 / 16'));
+ }
+ h.state.playlist.doubleHeightRows=false;h.tick();assert.ok(playlistPaint(h).includes('clip 10'));
+ h.state.playlist.doubleHeightRows=true;h.tick();assert.ok(playlistPaint(h).includes('Page 6 / 16'));
+ h.state.playlist.descending=true;h.state.playlist.items.reverse();h.tick();assert.ok(playlistPaint(h).includes('clip 10'));assert.ok(playlistPaint(h).includes('Page 11 / 16'));
+ h.state.playlist.selectedId=0;h.tick();assert.ok(playlistPaint(h).includes('clip 0'));assert.ok(playlistPaint(h).includes('Page 16 / 16'));
+ h.state.playlist={items:[],version:2};h.tick();assert.ok(playlistPaint(h).includes('Page 1 / 1'));
+ h.state.playlist={items:Array.from({length:14},(_,id)=>({id:`new:${id}`,name:`new clip ${id}`})),selectedId:'new:13',version:3};h.tick();assert.ok(playlistPaint(h).includes('new clip 13'));
+});
+test('VR reorder, playback changes and replacement queues cancel held item selection',t=>{
+ for(const change of ['reorder','playback','replace']){
+  const h=harness(t);h.state.playlist={items:Array.from({length:15},(_,id)=>({id,name:'duplicate.mp4'})),selectedId:0,version:1};
+  openPlaylist(h);h.aim(h.right,.1,.5+(.32-.5)*.9/.375);h.trigger(h.right,true);
+  if(change==='reorder')h.state.playlist.items.reverse();
+  if(change==='playback')h.state.playlist.selectedId=14;
+  if(change==='replace')h.state.playlist.items=Array.from({length:15},(_,id)=>({id:`new:${id}`,name:'duplicate.mp4'}));
+  h.trigger(h.right,false);assert.deepEqual(h.actions,[],change);
+  h.trigger(h.right,true);h.trigger(h.right,false);assert.equal(h.actions.length,1,change);
+ }
 });

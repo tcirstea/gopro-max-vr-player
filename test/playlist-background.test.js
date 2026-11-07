@@ -1,3 +1,4 @@
+import {installKeyboardControls} from '../src/keyboard-controls.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -22,7 +23,7 @@ function setup({metadata = async () => ({}), thumbnail = async () => null, stora
     }
     return elements.get(id);
   }
-  const context = vm.createContext({createPlaylistEntries, sortPlaylistEntries, PLAYLIST_SORTS, AbortController,
+  const context = vm.createContext({installKeyboardControls,createPlaylistEntries, sortPlaylistEntries, PLAYLIST_SORTS, AbortController,
     createPlaylistBrowser: () => ({render() {}, close() { closes++; }}), readPlaylistMetadata: metadata,
     createPlaylistThumbnail: (file, options) => { previews.push({file, ...options}); return thumbnail(file, options); },
     document: {getElementById: el, createElement: () => ({})}, window: {localStorage: storage, addEventListener: (name, fn) => { windows[name] = fn; }},

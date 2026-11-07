@@ -1,3 +1,4 @@
+import {installKeyboardControls} from './keyboard-controls.js';
 import {createNativePlayer} from './native-player.js';
 import {inspectFile,formatTime} from './inspect.js';
 import {createRenderer,demoPanorama} from './renderer.js';
@@ -180,14 +181,19 @@ video.addEventListener('error',()=>{if(objectURL&&video.error){playWhenReady=fal
 async function togglePlayback(){if($('play').disabled)return;const current=generation;pendingPlayback++;stopPreview();try{if(nativePlayer){if(nativePlayer.playing)nativePlayer.pause();else await nativePlayer.play();}else if(video.paused)await video.play();else video.pause();}catch(error){if(current===generation)status(`Playback blocked: ${error.message}`);}finally{if(current===generation){pendingPlayback--;schedulePreviews();}}}
 $('play').addEventListener('click',togglePlayback);
 $('canvas').addEventListener('xrtoggleplay',togglePlayback);
-$('canvas').addEventListener('xrseek',event=>{
- if($('seek').disabled)return;
+$('canvas').addEventListener('xrseek',event=>seekRelative(event.detail));
+installKeyboardControls({target:window,document,togglePlayback,seek:seekRelative,
+ canPlay:()=>!$('play').disabled,canSeek:()=>!$('seek').disabled,
+ revealControls:()=>$('viewer').classList?.remove('controls-hidden')
+});
+function seekRelative(seconds){
+ if($('seek').disabled||!Number.isFinite(seconds))return;
  try{const duration=nativePlayer?nativePlayer.duration:video.duration;
   if(!Number.isFinite(duration)||duration<=0)return;
-  const target=Math.max(0,Math.min(duration,(nativePlayer?nativeTime:video.currentTime)+event.detail));
+  const target=Math.max(0,Math.min(duration,(nativePlayer?nativeTime:video.currentTime)+seconds));
   if(nativePlayer){nativePlayer.seek(target);nativeTime=target;}else video.currentTime=target;
  }catch(error){status(`Seeking failed: ${error.message}`);}
-});
+}
 for(const name of ['play','pause','ended'])video.addEventListener(name,()=>{if(name==='play')stopPreview();else schedulePreviews();if(objectURL&&!nativePlayer)$('play').textContent=video.paused?'Play':'Pause';});
 video.addEventListener('ended',()=>{if(objectURL&&!nativePlayer&&video.ended)advancePlaylist(generation);});
 video.addEventListener('timeupdate',()=>{if(!objectURL||nativePlayer)return;$('time').textContent=`${formatTime(video.currentTime)} / ${formatTime(video.duration)}`;$('seek').value=Number.isFinite(video.duration)&&video.duration>0?video.currentTime/video.duration*1000:0;});

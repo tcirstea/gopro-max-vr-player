@@ -1,15 +1,16 @@
+import {installKeyboardControls} from '../src/keyboard-controls.js';
 import {createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS} from '../src/playlist-model.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 function harness(native=true){
- const elements=new Map(),seeks=[];let callbacks,panelProvider,played=0,paused=0;
+ const elements=new Map(),seeks=[],keys={};let callbacks,panelProvider,played=0,paused=0;
  function element(id){if(!elements.has(id))elements.set(id,{textContent:'',hidden:false,disabled:['play','seek'].includes(id),value:0,checked:true,paused:true,currentTime:0,duration:20,handlers:{},addEventListener(name,fn){this.handlers[name]=fn;},canPlayType(){return '';},async play(){this.paused=false;played++;},pause(){this.paused=true;paused++;},load(){},removeAttribute(){},replaceChildren(){}});return elements.get(id);}
  const player={setMuted(){},setVolume(){},playing:false,duration:20,close(){},seek(t){seeks.push(t);},async play(){this.playing=true;played++;},pause(){this.playing=false;paused++;}};
- const context=vm.createContext({createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:element},window:{addEventListener(){}},URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},createRenderer:()=>({setSource(){},reset(){},onXRPanelState(fn){panelProvider=fn;}}),demoPanorama:()=>({}),formatTime:n=>`${n}`,inspectFile:async()=>({nativeCandidate:native,brand:'test',tracks:[],videoTracks:[{}]}),createNativePlayer:async(file,options)=>{callbacks=options;return player;}});
+ const context=vm.createContext({installKeyboardControls,createPlaylistEntries,sortPlaylistEntries,PLAYLIST_SORTS,AbortController,createPlaylistBrowser:()=>({render(){},close(){}}),readPlaylistMetadata:async()=>({}),createPlaylistThumbnail:async()=>null,document:{getElementById:element},window:{addEventListener(n,f){keys[n]=f;}},URL:{createObjectURL:()=> 'blob:test',revokeObjectURL(){}},createRenderer:()=>({setSource(){},reset(){},onXRPanelState(fn){panelProvider=fn;}}),demoPanorama:()=>({}),formatTime:n=>`${n}`,inspectFile:async()=>({nativeCandidate:native,brand:'test',tracks:[],videoTracks:[{}]}),createNativePlayer:async(file,options)=>{callbacks=options;return player;}});
  const source=readFileSync(new URL('../src/app.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'');vm.runInContext(source,context);
- return {element,context,player,seeks,get panelState(){return panelProvider();},panelAction:(action,value)=>element('canvas').handlers.xrpanelaction({detail:{action,value}}),get callbacks(){return callbacks;},get played(){return played;},get paused(){return paused;},seek:delta=>element('canvas').handlers.xrseek({detail:delta}),toggle:()=>element('canvas').handlers.xrtoggleplay()};
+ return {element,context,player,seeks,key(key){const event={key,preventDefault(){}};keys.keydown(event);keys.keyup(event);},get panelState(){return panelProvider();},panelAction:(action,value)=>element('canvas').handlers.xrpanelaction({detail:{action,value}}),get callbacks(){return callbacks;},get played(){return played;},get paused(){return paused;},seek:delta=>element('canvas').handlers.xrseek({detail:delta}),toggle:()=>element('canvas').handlers.xrtoggleplay()};
 }
 test('XR native transport toggles playback, uses latest state, clamps and accumulates seeks',async()=>{
  const h=harness();await h.toggle();assert.equal(h.played,0);h.seek(5);assert.deepEqual(h.seeks,[]);
@@ -48,4 +49,15 @@ test('VR panel absolute equirectangular seek and play use existing transport gua
  const h=harness(false);await h.context.openFile({name:'test.mp4',size:100});h.element('equirect').handlers.click();h.element('video').handlers.loadeddata();
  h.panelAction('seek',.25);assert.equal(h.element('video').currentTime,5);h.panelAction('play');assert.equal(h.element('video').paused,false);
  h.element('video').readyState=3;assert.equal(h.panelState.advancing,true);h.element('video').seeking=true;assert.equal(h.panelState.advancing,false);
+});
+
+for(const native of [true,false])test(`keyboard transport reaches ${native?'native':'equirectangular'} playback and shared clamped seeking`,async()=>{
+ const h=harness(native);h.key(' ');h.key('ArrowRight');assert.equal(h.played,0);assert.deepEqual(h.seeks,[]);
+ await h.context.openFile({name:native?'test.360':'test.mp4',size:100});
+ if(!native){h.element('equirect').handlers.click();h.element('video').handlers.loadeddata();}
+ h.key(' ');assert.equal(h.played,1);h.key(' ');assert.equal(native?h.player.playing:!h.element('video').paused,false);
+ if(native)h.callbacks.onState({playing:false,currentTime:17,duration:20});else h.element('video').currentTime=17;
+ h.key('ArrowRight');h.key('ArrowLeft');
+ if(native)assert.deepEqual(h.seeks,[20,15]);else assert.equal(h.element('video').currentTime,15);
+ h.element('demo').handlers.click();h.key(' ');h.key('ArrowRight');assert.equal(h.played,1);
 });

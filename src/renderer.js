@@ -49,11 +49,32 @@ export function createRenderer(canvas) {
   function render(w,h,xr=false){for(const [n,v]of Object.entries({aspect:w/Math.max(1,h),yaw,pitch,fov,mode,xr:xr?1:0}))gl.uniform1f(loc(n),v);gl.uniformMatrix3fv(loc('stabilization'),false,stabilization);gl.uniformMatrix3fv(loc('xrCenter'),false,xrCenter);gl.drawArrays(gl.TRIANGLES,0,6);}
   function draw(time){requestAnimationFrame(draw);if(gl.isContextLost()||session)return;frameCallback?.(time);uploadSource();reportView();const scale=Math.min(globalThis.devicePixelRatio||1,2),w=Math.max(1,Math.round(canvas.clientWidth*scale)),h=Math.max(1,Math.round(canvas.clientHeight*scale));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;}gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,w,h);render(w,h);}
   function xrDraw(time,frame){if(!session||(frame.session&&frame.session!==session))return;session.requestAnimationFrame(xrDraw);xrControls.update(session,time);const pose=frame.getViewerPose(referenceSpace);if(!pose){viewDrag.rebase();xrPanel?.reset();return;}if(pendingRecenter){xrCenter=inverseViewRotation(pose.transform.matrix);yaw=0;pitch=0;fov=Math.PI/2;pendingRecenter=false;viewDrag.rebase();}const dragSpace=dragSource?.gripSpace||dragSource?.targetRaySpace;const controllerPose=dragSpace?frame.getPose?.(dragSpace,referenceSpace):null;xrCenter=viewDrag.update(xrCenter,pose.transform.matrix,controllerPose?.transform.matrix);frameCallback?.(time);try{xrPanel?.update(session,time,frame,referenceSpace,pose.transform.matrix);}catch(error){xrPanel?.reset();panelError(error);}uploadSource();reportView(pose.transform.matrix);const layer=session.renderState.baseLayer;gl.bindFramebuffer(gl.FRAMEBUFFER,layer.framebuffer);gl.clear(gl.COLOR_BUFFER_BIT);for(const view of pose.views){const v=layer.getViewport(view);gl.viewport(v.x,v.y,v.width,v.height);gl.uniformMatrix4fv(loc('invProjection'),false,invert4(view.projectionMatrix));gl.uniformMatrix4fv(loc('viewRotation'),false,view.transform.matrix);render(v.width,v.height,true);try{xrPanel?.draw(view);}catch(error){xrPanel?.reset();panelError(error);}}}
-  canvas.addEventListener('pointerdown',e=>{canvas.focus();canvas.setPointerCapture(e.pointerId);lastPointer=[e.clientX,e.clientY];});
-  canvas.addEventListener('pointermove',e=>{if(!lastPointer)return;yaw+=(e.clientX-lastPointer[0])*.004;pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.clientY-lastPointer[1])*.004));lastPointer=[e.clientX,e.clientY];});
-  for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,()=>lastPointer=null);
+  function endPointer(){
+    const pointer=lastPointer;lastPointer=null;
+    if(pointer&&canvas.hasPointerCapture?.(pointer.id))canvas.releasePointerCapture(pointer.id);
+  }
+  canvas.addEventListener('pointerdown',e=>{
+    if(lastPointer)return;
+    if(e.button===1){e.preventDefault?.();canvas.focus();fov=Math.PI/2;zoomDetents.reset();lastWheelTime=null;return;}
+    if(e.button!==undefined&&e.button!==0&&e.button!==2)return;
+    e.preventDefault?.();canvas.focus();canvas.setPointerCapture(e.pointerId);
+    lastPointer={id:e.pointerId,x:e.clientX,y:e.clientY,button:e.button??0};
+  });
+  canvas.addEventListener('pointermove',e=>{
+    if(!lastPointer||e.pointerId!==lastPointer.id)return;
+    if(e.buttons!==undefined&&!(e.buttons&(lastPointer.button===2?2:1))){endPointer();return;}
+    yaw+=(e.clientX-lastPointer.x)*.004;
+    pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.clientY-lastPointer.y)*.004));
+    lastPointer.x=e.clientX;lastPointer.y=e.clientY;
+  });
+  for(const name of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(name,e=>{if(e.pointerId===lastPointer?.id)endPointer();});
+  canvas.addEventListener('blur',endPointer);
+  globalThis.window?.addEventListener('blur',endPointer);
+  document.addEventListener?.('visibilitychange',()=>{if(document.hidden)endPointer();});
+  canvas.addEventListener('contextmenu',e=>e.preventDefault());
+  canvas.addEventListener('auxclick',e=>{if(e.button===1)e.preventDefault();});
   canvas.addEventListener('wheel',e=>{e.preventDefault();const time=e.timeStamp??performance.now();if(lastWheelTime===null||time-lastWheelTime>=150)zoomDetents.release();lastWheelTime=time;fov=zoomDetents.apply(fov,e.deltaY,time);},{passive:false});
-  canvas.addEventListener('keydown',e=>{if(!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','+','=','-'].includes(e.key))return;e.preventDefault();yaw+=e.key==='ArrowLeft'?.1:e.key==='ArrowRight'?-.1:0;pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.key==='ArrowUp'?.1:e.key==='ArrowDown'?-.1:0)));const delta=e.key==='-'?100:['+','='].includes(e.key)?-100:0;if(delta)fov=zoomDetents.apply(fov,delta,e.timeStamp??performance.now());});
+  canvas.addEventListener('keydown',e=>{if(e.defaultPrevented||e.isComposing||e.altKey||e.ctrlKey||e.metaKey||!['ArrowUp','ArrowDown','+','=','-'].includes(e.key))return;e.preventDefault();pitch=Math.max(-1.5,Math.min(1.5,pitch+(e.key==='ArrowUp'?.1:e.key==='ArrowDown'?-.1:0)));const delta=e.key==='-'?100:['+','='].includes(e.key)?-100:0;if(delta)fov=zoomDetents.apply(fov,delta,e.timeStamp??performance.now());});
   canvas.addEventListener('keyup',e=>{if(['+','=','-'].includes(e.key))zoomDetents.release();});
   canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();canvas.dispatchEvent(new CustomEvent('rendererror',{detail:'Graphics context lost. Reload the player to restore playback.'}));});
   requestAnimationFrame(draw);

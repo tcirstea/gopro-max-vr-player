@@ -1,6 +1,7 @@
 // Quest Touch xr-standard mapping: stick axes 2/3; grip 1; stick click 3;
 // A/X 4 toggles playback, B/Y 5 toggles the panel. Index trigger 0 reveals
-// hidden controls; a subsequent trigger click selects an item. Grip 1 stays drag.
+// hidden controls; subsequent presses select on the panel or dismiss when aimed
+// away (handled with the current ray in xr-panel). Grip 1 stays drag.
 export {DEFAULT_FOV,zoomFov} from './zoom.js';
 export function createXRControls({zoom, seek, togglePlayback, resetZoom=()=>{},dragView=()=>{},togglePanel=()=>{},showPanel=()=>{},zoomEnd=()=>{}}) {
   const states=new Map();let gripOwner=null,stickOwner=null,direction=0,repeatAt=0,zoomGesture=null;

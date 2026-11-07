@@ -1,6 +1,7 @@
 // World-anchored, stereo WebXR transport. All positions are in reference-space
 // metres, independent of panorama zoom/drag. No DOM overlay support is required.
 import {playlistDate, playlistSize} from './playlist-model.js';
+import {createPlaylistPagination, playlistPage} from './playlist-pagination.js';
 const WIDTH=1.2, HEIGHT=.375;
 // Shared layout keeps rendered buttons and ray targets in lockstep.
 const BUTTONS=['previous','play','next','mute','exit'].map((action,i)=>({action,left:.04+i*.192,width:.16}));
@@ -37,9 +38,10 @@ export function panelTarget(hit,state={}){
  return null;
 }
 // Normalized rectangles are shared by rendering and ray selection.
+const playlistCount=(playlist,mode)=>mode==='grid'?6:playlist?.doubleHeightRows?2:5;
 export function playlistLayout(playlist={},mode='list',requestedPage=0){
- const items=playlist?.items||[],rowScale=mode==='list'&&playlist.doubleHeightRows?2:1,count=mode==='grid'?6:rowScale===2?2:5;
- const pages=Math.max(1,Math.ceil(items.length/count)),page=Math.max(0,Math.min(pages-1,requestedPage));
+ const items=playlist?.items||[],rowScale=mode==='list'&&playlist.doubleHeightRows?2:1;
+ const {count,pages,page,start}=playlistPage(items.length,playlistCount(playlist,mode),requestedPage);
  const targets=[
   {action:'back',label:'Back',x:.04,y:.08,w:.21,h:.075},
   {action:'view',label:mode==='list'?'Grid view':'List view',x:.28,y:.08,w:.27,h:.075},
@@ -47,7 +49,7 @@ export function playlistLayout(playlist={},mode='list',requestedPage=0){
  ];
  const sorts=[['added','Added #'],['name','Filename'],['size','File size'],['dateTaken','File date'],['fileCreated','File created']];
  sorts.forEach(([key,label],i)=>targets.push({action:`sort:${key}`,label:(playlist?.sort===key?'• ':'')+label,x:.04+i*.186,y:.18,w:.177,h:.07}));
- items.slice(page*count,(page+1)*count).forEach((item,i)=>targets.push({action:`item:${item.id}`,item,x:mode==='grid'?.04+(i%3)*.313:.04,y:mode==='grid'?.28+Math.floor(i/3)*.29:.28+i*.12*rowScale,w:mode==='grid'?.294:.92,h:mode==='grid'?.27:.105*rowScale}));
+ items.slice(start,start+count).forEach((item,i)=>targets.push({action:`item:${item.id}`,item,x:mode==='grid'?.04+(i%3)*.313:.04,y:mode==='grid'?.28+Math.floor(i/3)*.29:.28+i*.12*rowScale,w:mode==='grid'?.294:.92,h:mode==='grid'?.27:.105*rowScale}));
  if(page>0)targets.push({action:'page-prev',label:'Previous page',x:.04,y:.9,w:.29,h:.075});
  if(page+1<pages)targets.push({action:'page-next',label:'Next page',x:.67,y:.9,w:.29,h:.075});
  return {targets,page,pages};
@@ -61,7 +63,8 @@ export function createPanelTimer(){
  return {reset(){elapsed=0;last=null;},update(time,playing,interacting=false){const dt=last===null?0:Math.max(0,Math.min(250,time-last));last=time;if(interacting)elapsed=0;else if(playing)elapsed+=dt;return elapsed>=2000;}};
 }
 export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
- let browsing=false,viewMode='list',page=0,lastRowScale=1;
+ let browsing=false,viewMode='list',page=0,lastLayout='';
+ const pagination=createPlaylistPagination();
  let panel=null,pending=null,visible=false,capture=null,preview=null,lastPaint='',hover=null,mediaId;
  const buttons=new Map(),timer=createPanelTimer();
  const canvas=document.createElement('canvas');canvas.width=1024;canvas.height=320;
@@ -77,22 +80,25 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
  // Do not disturb the panorama's buffer binding during lazy initialization.
  const oldBuffer=gl.getParameter(gl.ARRAY_BUFFER_BINDING);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);gl.bindBuffer(gl.ARRAY_BUFFER,oldBuffer);
  function getPose(frame,space,referenceSpace){try{return space?frame.getPose(space,referenceSpace):null;}catch{return null;}}
- function reset(){browsing=false;panel=null;pending=null;visible=false;capture=null;preview=null;hover=null;buttons.clear();timer.reset();lastPaint='';}
+ function reset(){browsing=false;panel=null;pending=null;visible=false;capture=null;preview=null;hover=null;buttons.clear();timer.reset();lastPaint='';lastLayout='';}
  function act(action,value){onAction(action,value);timer.reset();}
  function activate(action,state){
-  if(action==='playlist'){browsing=true;page=0;panel.height=.9;lastPaint='';timer.reset();return;}
+  if(action==='playlist'){browsing=true;pagination.open(state.playlist,playlistCount(state.playlist,viewMode));layout(state);panel.height=.9;lastPaint='';timer.reset();return;}
   if(action==='back'){browsing=false;panel.height=HEIGHT;lastPaint='';timer.reset();return;}
-  if(action==='view'){viewMode=viewMode==='list'?'grid':'list';page=0;lastPaint='';return;}
-  if(action==='page-prev'||action==='page-next'){page+=action==='page-next'?1:-1;lastPaint='';return;}
-  if(action.startsWith('sort:')){page=0;act('playlist-sort',action.slice(5));return;}
-  if(action==='direction'){page=0;act('playlist-direction');return;}
+  if(action==='view'){viewMode=viewMode==='list'?'grid':'list';layout(state);lastPaint='';return;}
+  if(action==='page-prev'||action==='page-next'){pagination.move(action==='page-next'?1:-1,state.playlist||{},playlistCount(state.playlist,viewMode));layout(state);lastPaint='';return;}
+  if(action.startsWith('sort:')){act('playlist-sort',action.slice(5));return;}
+  if(action==='direction'){act('playlist-direction');return;}
   if(action.startsWith('item:')){const item=state.playlist?.items?.find(item=>String(item.id)===action.slice(5));if(item){reset();act('playlist-select',item.id);}return;}
   act(action);
  }
  function layout(state){
-  const rowScale=viewMode==='list'&&state.playlist?.doubleHeightRows?2:1;
-  if(rowScale!==lastRowScale){page=0;capture=null;lastRowScale=rowScale;}
-  const result=playlistLayout(state.playlist,viewMode,page);page=result.page;return result;}
+  page=pagination.sync(state.playlist,playlistCount(state.playlist,viewMode)).page;
+  const result=playlistLayout(state.playlist,viewMode,page);
+  const key=JSON.stringify([viewMode,!!state.playlist?.doubleHeightRows,page,result.targets.map(target=>target.action)]);
+  // Never complete a held selection against a replacement/reordered page.
+  if(key!==lastLayout){capture=null;lastLayout=key;}
+  return result;}
  function paintPlaylist(state){
   const {targets,pages}=layout(state),playlist=state.playlist||{};
   ctx.fillStyle='#11232c';ctx.fillRect(0,0,1024,768);
@@ -124,6 +130,7 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
  }
 
  function paint(state){
+ if(browsing)layout(state);
  const progress=preview??(state.duration>0?clamp(state.currentTime/state.duration):0);
  const key=JSON.stringify([browsing,viewMode,page,state.playlist?.version,state.playlist?.doubleHeightRows,state.playlist?.sort,state.playlist?.descending,state.playlist?.selectedId,state.playlist?.items?.map(item=>[item.id,item.name,!!item.thumbnail]),state.playing,state.canPlay,state.canSeek,state.canPrevious,state.canNext,state.canMute,state.muted,Math.floor(state.currentTime||0),Math.floor(state.duration||0),progress,hover]);
  if(key===lastPaint)return;lastPaint=key;
@@ -151,6 +158,7 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
   if(pending){const pose=sources.includes(pending)&&getPose(frame,pending.targetRaySpace,referenceSpace);if(pose&&viewer){panel=placePanel(pose.transform.matrix,viewer);pending=null;visible=true;timer.reset();}else if(!sources.includes(pending)){pending=null;}}
   if(!visible)return;
   const state=getState();hover=null;
+  if(browsing)layout(state);
   if(state.mediaId!==mediaId){capture=null;preview=null;mediaId=state.mediaId;timer.reset();}
   if(capture&&!sources.includes(capture.source)){capture=null;preview=null;}
   for(const s of [...buttons.keys()])if(!sources.includes(s))buttons.delete(s);
@@ -159,6 +167,9 @@ export function createXRPanel(gl,{getState=()=>({}),onAction=()=>{}}={}){
    const pose=getPose(frame,source.targetRaySpace,referenceSpace);
    if(!pose&&capture?.source===source){capture=null;preview=null;}
    const hit=panelHit(panel,pose?.transform.matrix),target=browsing?playlistTarget(hit,layout(state)):panelTarget(hit,state);
+   // Only a fresh, tracked press away from the entire surface dismisses.
+   // Opening/held presses are seeded above; blank and disabled targets stay open.
+   if(down&&!previous&&pose&&!hit&&!capture){reset();return;}
    if(hit&&(!hover||(!capture&&target&&!hover.target)||capture?.source===source))hover={...hit,target};
    if(down&&!previous&&target&&!capture){capture={source,target};if(target==='seek')preview=clamp((hit.u-.06)/.88);timer.reset();}
    if(capture?.source===source){
