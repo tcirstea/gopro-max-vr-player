@@ -319,3 +319,11 @@ The final integration passes **390/390 Node tests** on Node 24.22.1, syntax chec
 This release supersedes older descriptions of browser equirectangular playback and projection confirmation: browser-decoded media is flat only, including MP4, while native MAX projection is restricted to original `.360` files. The generated panorama demo remains available. The fullscreen dock also works on the monitor during computer-hosted XR mirroring and uses the same live controls, without duplicating transport state or affecting the headset panel.
 
 All verification media and interfaces are synthetic or mocked. No private clips, frames, previews or diagnostics were published. Real GPU shader compilation, browser codec support/fullscreen layout and physical-headset playback remain unverified; no previously denied browser/server route was retried. Target-device acceptance should cover a non-private browser-decodable flat clip, native `.360`, distance zoom and stick-click recenter after head motion, flat/panorama transitions, fullscreen idle/proximity/focus, external fullscreen exit with the playlist open, and monitor mirroring.
+
+## Documentation reorganization (2026-11-11)
+
+- Replaced the README with a short setup, compatibility and controls guide. Moved detailed behavior to PLAYER_GUIDE.md and engineering details to DEVELOPMENT.md; added HISTORY.md and AGENTS.md.
+- `npm test`: **390/390 passed**, Node v24.22.1.
+- `git diff --check`: passed. All relative links in the new/rewritten documentation resolve to repository files. History links use commit IDs verified in the local Git history.
+- Checked README UI labels against index.html, native dimensions against src/native-demux.js, and setup/test commands against package.json.
+- Documentation-only changes. No new browser, HEVC, GPU or physical-headset validation was performed. Earlier verification entries remain historical records, including references to superseded projection behavior.

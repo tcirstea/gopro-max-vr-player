@@ -1,175 +1,70 @@
-# 360° GoPro VR player — experimental prototype
+# GoPro MAX VR player
 
-A static, local-first player targeting original **GoPro MAX** `.360` files without an export step.
+Play original GoPro MAX `.360` videos in your browser without exporting them first. You can also watch ordinary videos on a flat screen, on your desktop or in VR.
 
-**An experimental native playback pipeline is implemented, but real browser/HEVC/GPU and headset playback are not yet verified.** Parsing and projection are covered by automated unit tests. These checks do not establish end-to-end browser compatibility. This independent project is not affiliated with GoPro.
+Files stay on your device. There are no uploads, accounts or runtime dependencies. This is an independent project, not affiliated with GoPro.
 
-## Implemented
+**Native MAX playback and VR are experimental.** Automated tests cover the implementation, but real HEVC playback, GPU performance and headset behavior still need testing on supported devices.
 
-- Local file selection; **no video uploads**, backend, runtime CDN or npm dependencies.
-- Bounded MP4 inspection and a dedicated sample-table demuxer that prepares files up to 64 MiB once in shared local memory; larger recordings use shared **64 MiB chunks with asynchronous lookahead**, bounded to 256 MiB of compressed cache plus in-flight reads.
-- Two WebCodecs HEVC decoders, actual-codec capability checks, timestamp pairing, bounded queues, seeking, play/pause and frame cleanup.
-- Synchronized native AAC stereo and explicit-SA3D ambisonic headphone audio, with mute, mode switching and bounded local decoding; experimental, not physically audio/headset-tested.
-- Frame-aligned GPMF relative-orientation stabilization; not absolute horizon leveling. See [STABILIZATION.md](STABILIZATION.md).
-- Original MAX EAC projection with second-track rotation and duplicated-overlap blending.
-- Experimental immersive WebXR with per-eye views and orientation-only panorama tracking; **not physically headset-tested**.
-- Optional desktop headset mirror with matching zoom/orientation and in-app VR controls, rendered locally without casting.
-- Browser-decodable flat MP4, WebM, Ogg and other compatible containers, with aspect-fit desktop playback and a world-space VR screen. Container and codec support vary by browser/OS/hardware; 360° MP4 projections are not supported.
-- A generated panorama demo (not GoPro footage), responsive UI, tests and GitHub Pages workflow.
+## Get started
 
-## Run locally
-
-Requires Node 22+ for tests and Python 3 for the static server. No npm install is needed.
+You need Node 22+ and Python 3. No `npm install` is needed.
 
 ```sh
-npm test
 npm start
-# Open http://localhost:8000
 ```
 
-Open an original MAX `.360` file to attempt native decoding locally. The current native demux path accepts **two 4096×1344 HEVC video tracks**. WebCodecs requires HTTPS or localhost, and HEVC availability depends on browser, OS and hardware. Passing a capability check does not guarantee two simultaneous decoders can sustain playback. Unsupported devices get an error; there is no transcoding or upload fallback.
+Open [localhost:8000](http://localhost:8000), then:
 
-Ordinary browser-decodable videos open automatically as **flat 2D video**, with normal browser audio. There is no equirectangular or other 360° MP4 projection mode. Dimensions, container extensions and multiple tracks do not imply a projection. Use the original **.360** file for native MAX playback; a renamed .mp4 uses the flat browser path. A fresh page starts muted: uncheck **Muted** to listen. Mute, volume and preferred native audio mode are then retained when opening other clips. Open the browser-only **Experimental settings** to choose your preferred **Native audio type**. When explicit supported spatial metadata is present, choose **Spatial headphones** for head-relative sound. Stereo does not rotate with the view. See [AUDIO.md](AUDIO.md) for format support and verification limits.
+1. Choose **Explore demo** to try the generated panorama, or **Open local videos** to select your files.
+2. Press **Play**. The first selected video opens paused.
+3. Uncheck **Muted** if you want sound. Each page load starts muted.
+4. Choose **Full screen**, or **Enter VR** if your browser supports an immersive headset session.
 
-**Enter VR** is enabled only if the browser reports immersive WebXR support. Both eyes share the same monoscopic panorama for native MAX and the demo; their panorama sampling intentionally ignores translation. Flat video uses a finite screen shared by both eyes, retaining actual eye origins and headset translation/rotation. A supporting headset/browser and secure context are required.
+## Supported videos
 
-## Flat browser video
+- **Original GoPro MAX `.360`:** experimental 360° playback, stereo or supported spatial headphone audio, and relative-orientation stabilization. Requires WebCodecs with HEVC support. The native reader accepts two 4096×1344 HEVC video tracks; MAX2 support is not claimed.
+- **Ordinary videos:** MP4, WebM, Ogg and other formats your browser can decode. These play as flat video, including on a screen in VR. Codec support depends on your browser, operating system and hardware.
+- **Demo:** a generated panorama that needs no camera footage.
 
-MP4, WebM, Ogg and other containers are handed to the browser's media decoder. ISO-BMFF inspection is not required to succeed for ordinary browser media. This does **not** guarantee every codec in those containers will play. Unsupported media reports an error and remains skippable. Nothing is transcoded or uploaded. 360° MP4/equirectangular browser playback is intentionally unsupported; native original GoPro `.360` playback and the generated panorama demo remain separate paths.
+360° MP4/equirectangular playback, export and transcoding are not supported. Keep original MAX files as `.360`; renaming one to `.mp4` sends it to the flat-video player.
 
-Desktop viewing fits the complete picture with black bars, preserving portrait, square and landscape aspect ratios. Mouse pan/right-drag roll and keyboard tilt are disabled. Scroll or +/− scales the picture; middle-click restores the fitted size. Transport, sorted playlist navigation, relative seeks, next-clip preparation, volume and mute are shared with native playback.
+WebGL is required. Native playback and VR require HTTPS or localhost, and VR also needs a compatible headset and WebXR browser. A successful capability check does not guarantee smooth playback.
 
-In VR, a fixed-size screen appears 2 metres in front of the center of the current headset pose. Its maximum width is 3.2 metres and height 2.4 metres, preserving aspect ratio. Both eyes view that same world-space plane using their own actual projection and position; the plane is not independently attached to each eye. Normal head movement remains live. The screen stays put when looking around or moving. Stick forward/back moves it closer/farther without changing FOV; either stick click resets distance and brings it in front of the current head pose. Reset waits for tracking if temporarily lost. Grip rotation is disabled for flat video. Reentering VR or a reference-space reset places the screen in front again. Panorama zoom/view preferences remain separate and are restored when returning to native MAX or the demo. The optional desktop headset mirror uses the same plane and one actual eye.
+## Everyday controls
 
-Automated checks exercise geometry, stereo eye transforms, aspect ratios, reset/tracking-loss/reentry, controls, mixed playlist transitions and codec error paths. Real browser GPU compilation, actual codec playback, physical stereo comfort and headset interactions still need target-device validation.
+**Desktop**
 
-## Desktop fullscreen controls
+- Space: play/pause. Left/Right: seek five seconds, including across videos in the playlist.
+- Left-drag: look around a panorama. Right-drag horizontally: roll it. Up/Down: tilt it.
+- Scroll or +/−: zoom. Middle-click: reset zoom. **Reset view** also recenters the view.
+- In fullscreen, controls hide after two seconds of inactivity. Move near the bottom, click the viewer or press Tab to show them.
 
-**Full screen** places the existing playback, seek, mute/volume, Previous/Next, playlist, Reset and Exit full screen controls in a dock at the bottom. It hides after **two seconds without interaction**, whether playback is playing or paused. Move the mouse within 48 pixels above the dock or over its area to reveal it again; clicking/tapping the viewer or pressing Tab also reveals it. Movement elsewhere keeps an already-visible dock open, but does not reveal a hidden one.
+Shortcuts leave form fields and dialogs alone. Pan, roll and tilt apply to panoramas, not flat video.
 
-Keyboard/assistive focus, a held pointer on a control (including seek/volume dragging), and an open playlist keep controls visible. Pointer-click focus alone does not prevent auto-hide; focus returns to the viewer when that dock hides. Leaving fullscreen restores the same controls below the viewer, retaining playback and all settings. The same dock is available on a computer-hosted fullscreen VR mirror; it does not change the headset's separate panel or auto-hide rules.
+**Quest controllers**
 
-## Experimental desktop headset mirror
+- A/X: play/pause. Either stick left/right: seek five seconds.
+- Either stick forward/back: zoom a panorama or move the flat screen closer/farther.
+- Click either stick: reset panorama zoom, or place the flat screen in front of you.
+- Hold a side grip and move/rotate the controller: reposition a panorama.
+- B/Y or an index trigger: show controls. Point and use the trigger to select; release the opening trigger press before selecting.
 
-When a **computer browser is running the immersive VR session** (for example, a headset connected to the PC), open **Experimental settings → Mirror headset on this screen**. The checkbox starts off on every page load and can be changed before or during VR. It stays selected across clips and VR reentry within that page only. Turning it off immediately clears the last mirrored image; normal desktop viewing resumes when VR ends.
+See the [player guide](PLAYER_GUIDE.md) for the full controls and settings.
 
-The monitor redraws the **left eye** (or the first available mono view), using its actual projection and pose plus the same zoom, panorama drag/recenter and stabilization. The in-app VR transport/playlist panel and its pointer indicator are included when visible. This is a single-eye image before headset lens distortion, not a capture of the system compositor: headset system menus, passthrough, runtime overlays and the other eye are not shown. The eye aspect ratio is preserved with black bars rather than stretching or cropping. Desktop Reset, Full screen and Exit VR buttons remain available.
+## Playlists and settings
 
-**Headset mirror quality** offers two session-only choices, selectable before or during VR. **Performance** is the default and caps the canvas's longest side at 1280 pixels. **Match headset** targets the actual left-eye XR render-viewport resolution, not a headset model's advertised panel resolution. The canvas includes enough extra pixels for black bars so the fitted eye itself reaches that target. For example, a 1920×1920 eye in a 16:9 fullscreen canvas requests approximately 3414×1920 canvas pixels, not 1920×1080. It adapts to fullscreen/resize and changing XR eye dimensions, independent of desktop display pixel ratio. GPU texture, renderbuffer and viewport limits can lower the target; an implementation that supplies a smaller drawing buffer is also respected. The monitor may still scale the result to its physical screen pixels. Choose the quality before entering fullscreen; the selector is in Experimental settings. It resets to Performance on reload, and has no effect on ordinary desktop viewing when there is no XR session.
+Select multiple files to make a local playlist. **Browse playlist** offers sorting, list/grid views and locally generated previews. Sorting changes playback order. The next video starts automatically at the end of a clip when browser permissions allow; transitions may have gaps.
 
-The mirror shares the existing GPU textures and playback clock. It adds **one render pass per available XR frame**; Match headset increases GPU/memory cost, especially with large black bars, but does not increase headset resolution. It adds no decoder, readback, recording, network stream or second audio output. Disable it if headset playback slows. When off, there is no mirror render/resize pass. Tracking loss, hidden/blurred XR visibility, page hiding or opting out clears the previously mirrored frame. A mirror-only drawing error disables the mirror while allowing the headset loop to continue. A graphics-context loss still requires reloading the player.
+**Experimental settings** contains native audio options, thumbnail settings and an optional desktop headset mirror. The mirror only works when that computer is running the VR session. It does not cast a standalone Quest to another computer, and people at the monitor can see the video and visible playlist details.
 
-**Privacy and compatibility:** People looking at the monitor can see the video, the current filename and file date whenever the VR controls are visible, and any open in-app VR playlist, including its filenames and previews. Nothing is uploaded or saved by this feature. It cannot bypass the headset's casting restrictions or send a standalone Quest browser view to a separate computer. It requires the page itself to host the immersive session on that computer and a browser/runtime that composites the page's canvas during XR. Automated tests cover the rendering and lifecycle logic; actual PC-connected-headset output, browser compositing and sustained GPU cost remain unverified on physical hardware.
+If native playback buffers repeatedly, use **Save playback diagnostics**. It downloads technical counters without footage, audio, filenames or paths. Nothing is sent automatically.
 
-## Local playlist
+## More information
 
-Choose one or multiple local videos in the file picker. The initial added order follows your operating system's picker; filenames and file objects remain on this page only. Use **Previous**, **Next**, the clip dropdown, or **Browse playlist** beside the playback controls. In VR, choose **Playlist** on the transport panel to open its separate immersive window.
-
-The browser and VR playlist windows offer **list/grid**, paging, and ascending/descending sorting by **number added**, **filename** (natural numeric order), **file size**, **date**, or **date file created**. Sorting changes the actual queue used by Previous/Next and end-of-clip autoplay, without restarting the current video. Unknown dates sort last in either direction; equal values retain added order. Each time either playlist window opens, it shows the page containing the current video. On desktop that video is also scrolled into view. Switching list/grid or row size keeps your browsing anchor visible, including after scrolling on desktop; repeated switches do not drift back toward the start. Changing the current clip or sort returns to the current clip’s page, while thumbnail/metadata refreshes preserve your browsing position. Selecting a video closes the window, hides controls and starts that video. On desktop, click the viewer or press a key while it is focused to reveal its controls again.
-
-**Experimental settings → Generate thumbnails from the middle of the clip** is on by default. Previews are generated directly from the selected video, without needing a separate GoPro thumbnail file; embedded/sidecar thumbnail loading is not implemented. Generation happens entirely locally, one at a time while playback is paused. Browser-decodable clips seek to the midpoint; native `.360` previews decode a single HEVC track's keyframe nearest the midpoint (an unstitched thumbnail). Unsupported codecs or decoding timeouts show a placeholder; playback never depends on a preview. Playing or changing clips, disabling generation, or leaving the page cancels thumbnail work so it does not compete with playback. Completed previews stay for the current selection. Switching the option on retries missing previews. Native .360 previews use the native path; MP4 and other browser-video previews stay on the browser path, including renamed MAX files.
-
-**Experimental settings → Double-height playlist rows (2×)** enlarges list rows and thumbnails in both the browser and VR, without changing grid view. Browser list minimum height changes from 144 to 288 pixels. Large preview boxes are now 576×252 pixels (twice their previous width), with a wider drawing surface so native previews actually fill that space without stretching. Narrow screens use up to 384×168 pixels and stack the preview above its text; long names can expand rows rather than being clipped. The browser shows six large rows per page instead of twelve; VR shows two large rows instead of five, with matching controller hit targets and 432-pixel-wide preview boxes (twice the previous large width). Changing row size does not restart playback or preview generation.
-
-**File information:** Both galleries show the filename, file size and date, with size and date on separate lines in list and grid views. Camera/firmware, duration, codec, track dimensions, preview-source labels and unavailable filesystem-creation fields are no longer repeated in each item. Optional metadata is still read locally to support native preview detection and sorting; nothing is uploaded.
-
-**Date limitations:** The **Date** sort uses valid MP4/QuickTime movie or media creation fields, which can describe an export rather than capture. Some cameras store a local wall clock in fields conventionally defined as UTC; the gallery preserves the stored clock values without a timezone suffix or browser-timezone conversion. A shared note keeps the timezone uncertainty clear. Sorting compares those stored values, not guaranteed worldwide capture instants. Missing dates show “Date unavailable” and sort last. Browsers expose last-modified but **not original filesystem creation time**, so File created remains unknown; last-modified is never relabeled as created.
-
-The first selected clip opens paused. Previous/Next navigation retains whether playback was playing or paused; selecting an item in either playlist window explicitly starts it. Reaching a clip's end advances and plays the next clip; the last clip stops (no loop). Native MAX clips can continue automatically when browser permissions allow. Browser-video clips open flat without a projection prompt, including on automatic continuation. If autoplay is blocked, press Play. A bad/unsupported clip stops with an error; use Next to skip it.
-
-**Seeking across videos:** Keyboard Left/Right and either controller stick's horizontal direction still move by 5 seconds, repeating every 500 ms while held. They now carry the remaining time into the previous or next clip in the current sorted queue, including across several short clips. For example, seeking forward 5 seconds from 2 seconds before the end lands 3 seconds into the next clip. Exact forward boundaries select the next clip at its beginning; the first and last playlist endpoints clamp without wrapping. The desktop and VR progress bars still seek within the current clip.
-
-Cross-video seeks preserve playing or paused intent and hold the last image while changing files. Playback pauses while an unknown duration is read locally; native durations come from the same sample tables as playback, and browser durations use a temporary metadata-only element that never plays. Native destinations open directly at the requested time with synchronized video/audio seeking. Held inputs accumulate during loading; reversing can leave a still-loading browser destination. Browser destinations always use flat projection and open without a projection prompt. Play/Pause can change the intended final state while loading. Manual selection, queue replacement, sorting and progress-bar seeks cancel obsolete pending work. If duration reading fails, the current position is retained; if opening fails, the player attempts to restore the original clip and position. An error remains visible if restoration also fails. This remains local-only and does not promise seamless or instant transitions.
-
-**Next-clip preparation:** During the final 15 seconds of advancing playback, the player prepares the next item in the current sorted queue locally. Native MAX preparation parses sample tables and stages one compressed 64 MiB startup chunk (or the whole file up to 64 MiB). It creates **no extra HEVC or audio decoder** while the current clip plays. Browser-video clips stage a maximum 32 MiB prefix, with up to another 32 MiB temporary copy while building their local Blob. Original byte order and MIME type are retained, including for non-MP4 containers; no hidden decoder is played during preparation. Only one speculative read/preparation can run at a time; canceled unabortable Blob reads must settle before another starts. This is a compressed-input allowance, additional to the active native input cache (up to 256 MiB), metadata/sample tables and normal browser/decoder memory.
-
-On natural EOF, a fully prepared exact successor is adopted and the last rendered image stays visible until the new clip has a frame, instead of flashing the demo. Manual Previous/Next and gallery selections use the normal open path. Sorting retargets the successor. Pausing, buffering, seeking, replacing the queue, hiding the page and errors release or cancel preparation; a seek can rearm it after playback advances 250 ms beyond the new position. A pending or failed preload never blocks normal opening or skips a clip. This reduces repeated file reads and metadata setup but **does not promise gapless video or audio**: decoders/audio contexts still start at the boundary, browser autoplay permission still applies, and separated track data may need additional reads. A slow device or disk may still pause. Actual transition latency and performance need target-device validation.
-
-Opening another selection replaces the queue. Explore demo clears the queue. Only the current clip has playback decoders/object URL; a temporary preview decoder may run while paused. Preloading does not create a hidden playing video or a second sound output. Stale asynchronous loads cannot replace a newer selection. Audio and view preferences carry through navigation. No uploads, playlist persistence or filesystem scanning are added.
-
-## Preferences when switching videos
-
-Audio and view preferences stay in memory for the current page session. Only the two explicit gallery checkbox choices are saved to local browser storage, when available. No footage, filenames, metadata or previews are persisted or uploaded.
-
-- **Mute and volume** carry over between native MAX, flat clips and the demo. Volume has its own slider; changing it does not silently unmute audio.
-- **Preferred native audio mode** is remembered separately from each clip's available modes. If spatial headphones are unavailable, the clip uses its supported default (normally stereo), without losing the spatial preference; the next compatible clip restores it. Flat playback uses the browser's audio path, not native spatial decoding.
-- **Zoom, viewing direction (including desktop roll) and the current XR recenter offset** survive file switches and the demo. **Reset view** resets zoom and view; for panoramas, stick click resets **zoom only**, keeping view/drag adjustments. Flat-screen distance is independent; entering flat mode or reentering VR places the screen in front of the viewer. In flat mode either stick click or Reset view restores default distance and recenters the screen. Leaving/reentering VR still clears its session-specific recenter offset as documented below.
-- **Video-dependent state resets:** the new clip starts at its beginning with fresh decoders, duration, buffering, telemetry stabilization and diagnostics. Initial file selections remain paused; Previous/Next navigation retains play/pause state and end-of-clip advancement resumes playback as described above.
-- The browser-only **Experimental settings** keeps audio type for the current page session and saves explicit thumbnail-generation and double-height-row choices across reloads. These controls are not added to the immersive panel; their results still apply to the shared browser/VR player and playlist. Audio type can be selected before opening a clip; unsupported clips retain that preference while showing their current fallback.
-- A page reload starts muted, at full volume, with stereo preference, default view and desktop mirroring off. Gallery defaults are generation on and normal-height rows when no valid saved choice exists; an explicit saved generation-off choice is respected. Older versions had no saved gallery settings, so their session-only choices cannot be recovered after reload. If storage is blocked or full, changes still work for the current session.
-
-Desktop keyboard: **Space** toggles playback; **Left/Right** seek ±5 seconds across the sorted playlist (hold to repeat every 500 ms). Shortcuts leave focused buttons, form fields and open dialogs alone. Drag with the **left mouse button** to pan; **right-drag horizontally** to roll around your current line of sight (rightward rolls the image clockwise, leftward counterclockwise). Vertical right-drag does not pan. The context menu is suppressed only on the panorama; **middle-click** resets zoom without changing the view; **Up/Down** tilt the view and **+/−** zoom while the panorama is focused. Desktop roll is retained across clips and VR entry/exit, but immersive viewing uses headset orientation and grip rotation instead of desktop pitch/roll.
-
-## Quest controller controls (immersive VR)
-
-Controls are mirrored on **both hands**:
-
-- **Either stick forward/back:** zoom in/out. For flat video this moves the screen between 0.6 and 8 metres, leaving headset FOV unchanged. The following FOV behavior applies only to panoramas. The underlying FOV range is now **0.15–2.8 radians** (formerly 0.4–2.1), with the original zoom speed. In VR, this scales panorama rays in eye space before head rotation; it does not change headset optics/tracking.
-- **Panorama zoom detents:** crossing the old minimum (**0.4**), default (**π/2**) or old maximum (**2.1**) briefly stops exactly there. Keep holding to continue after **0.5 seconds**, or center the zooming stick and move it again to continue immediately. The same stop cannot repeatedly trap continuous input. Overshoot is discarded; releasing never causes delayed zoom. Mouse wheel uses the same stops (a 150 ms wheel-idle gap starts a new gesture); keyboard +/− uses them too, with key release clearing the hold.
-- **Either stick right/left:** seek ±5 seconds; holding repeats every 500 ms. Works paused or playing in native MAX and flat clips, carries overshoot across the sorted playlist, and clamps only at the playlist start/end.
-- **A (right) / X (left):** toggle play/pause once per press.
-- **Click either stick:** flat video resets its screen to 2 metres in front of the current head position/orientation; panoramas reset **zoom only**, keeping view direction, controller-drag rotation/roll and audio orientation. Stick-axis actions are suppressed while clicked. The separate **Reset view** button still recenters and resets zoom.
-- **Hold either lower/side grip and move/rotate that controller:** disabled for flat video; drag the panorama left/right or up/down, and twist it to correct yaw/pitch/roll. Head tracking stays independent. Translation pans at 2 radians/metre in the viewing plane at grab time; forward/back movement is ignored. Release retains the adjustment without a snap. This reorients a 360° image, not a positional 3D camera. Zoom stays unchanged and spatial audio follows the same correction.
-- **Either upper/index trigger (bumper above the grip):** reveal hidden controls at that controller. Release the opening press, then use the next press/release to select. Press it again while aiming outside the visible panel to hide controls. Aiming at its blank surface or a disabled control does not dismiss it, and another hand cannot dismiss an active interaction. Grip-drag behavior is unchanged.
-- **B (right) / Y (left):** show/hide the VR transport panel at the pointing controller. Point either controller at its buttons and use the **upper index trigger** to select. It provides Previous, Play/Pause, Next, Mute/Unmute, Exit VR, a Playlist window button and a seek bar; trigger-drag the bar and release to commit one seek. Mute shares the browser checkbox and persists when switching videos; it is disabled when native audio is unavailable. Stereo/spatial audio-style selection stays in the browser controls only. The panel stays in the world where summoned, independent of panorama drag/zoom, and auto-hides after two seconds of active playback without interaction (not while paused/buffering/scrubbing or browsing the playlist). The playlist stays open until Back, B/Y, an away-aimed bumper press, session dismissal, or video selection; selecting a video hides all VR controls.
-
-**Current clip caption:** The filename and embedded file date float as two lines of text just above the transport panel or playlist window, without growing its background, moving controls or changing controller targets. Long filenames are measured and ellipsized rather than squeezed. The caption follows the selected clip and updates when local metadata arrives; it hides with the panel and is absent in the demo. “Reading file date…” becomes the stored date or “Date unavailable”. The label says **File date** because MP4 movie/media creation fields may describe an export rather than capture. Stored clock values are preserved without browser-timezone conversion and marked **timezone unverified**; filesystem last-modified is never substituted. This reuses existing local inspection, with no new uploads or persistence. The optional desktop headset mirror also shows this caption.
-
-Both hands cannot fight over a drag: the first grip retains ownership until released; a competing already-held grip must be released/repressed. If both sticks are active, right has priority; otherwise left works identically. Simultaneous face-button/stick-click actions are coalesced once per frame (right wins simultaneous panel summons). Dead zones and dominant-axis selection reduce drift/accidental seeking. Buttons held on connection or focus return must be released first. Focus loss, disconnect and VR exit clear input state. Trigger-plus-stick turning is still unassigned.
-
-Mappings use Quest Touch's `xr-standard` layout (stick axes 2/3; grip 1; stick click 3; A/X 4; B/Y 5; upper trigger 0), polled from the XR session rather than desktop gamepads. Hand tracking and nonstandard mappings are ignored. [WebXR mapping specification](https://www.w3.org/TR/webxr-gamepads-module-1/) and [Quest Touch profile](https://github.com/immersive-web/webxr-input-profiles/blob/main/packages/registry/profiles/oculus/oculus-touch-v3.json). Automated mock/controller tests do not replace physical Quest testing; comfort, button media permissions and native decode/seek responsiveness still need device validation.
-
-## Current limits
-
-- **Unverified end-to-end native playback:** real WebCodecs decode, GPU rendering, full-resolution performance, browser seeking and headset sessions still need testing on target devices.
-- Native stereo/spatial audio and GPMF relative-orientation stabilization are implemented experimentally. Actual A/V listening, headset localization and general orientation conventions still need device validation. Absolute horizon leveling and optical-flow seam correction are not implemented. Basic duplicated-overlap blending is implemented, but visual seam quality is not production-validated.
-- Native demux rejects reordered presentation timestamps, nonzero edit-list offsets, unsupported sample descriptions and dimensions. It is not a general-purpose MP4 demuxer. MAX2 compatibility is not claimed.
-- Renderer math also has a 2272×736 template, but the current native demux path does **not** accept that mode yet.
-- Metadata is capped at 16 MiB; sample counts and sample sizes are bounded. Long recordings may exceed conservative limits. No export or transcoding.
-- WebGL is required. Context loss asks for reload. Browser/device capability hints are not guarantees.
-
-## Verification
-
-See [VERIFICATION.md](VERIFICATION.md) for exact checks and gaps. The current suite covers audio, stabilization, parsing, reading and mocked playback, including parser limits, sample tables, mocked decoding lifecycle and EAC projection math. No camera recordings or derived previews are included in this repository.
-
-## GitHub Pages
-
-Select **Settings → Pages → Source → GitHub Actions**. The workflow runs tests before deploying `index.html`, `src/`, third-party notices and licenses; pull requests test without deploying. Relative URLs support repository project pages. HTTPS enables the secure-context APIs needed for WebCodecs and WebXR.
-
-Never commit camera originals; common video extensions are ignored. A private source repository does not necessarily mean a private Pages website, and private-repository Pages availability depends on the GitHub plan.
-
-## Next release gates
-
-1. Verify actual native playback and seeking using suitable test media on supported desktop browsers; compare orientation and seams with a trusted export.
-2. Exercise rapid source switching, pause/resume, repeated seeks, end-of-file, decoder failure, context loss, GPU texture limits and long-file memory behavior.
-3. Validate real-time dual decoding at full resolution, mobile thermal behavior and browser/OS/device compatibility.
-4. Test actual headset WebXR sessions, per-eye views, recentering, session interruption and exit/reentry.
-5. Validate synchronized native audio and telemetry-based stabilization on the target device; expand container/mode support only with verified fixtures.
-
-## Format and attribution
-
-Original MAX `.360` files are not ordinary equirectangular videos. GoPro stitches in-camera, then stores a GoPro-specific multi-track EAC layout requiring unpacking and reprojection.
-
-- [GoPro: MAX stitching and resolution](https://gopro.com/en/dm/news/max-tech-specs-stitching-resolution)
-- [Trek View max2sphere](https://github.com/trek-view/max2sphere/blob/main/max2sphere.c): projection/blending reference, Apache-2.0; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- [MAX_RENDERER.md](MAX_RENDERER.md): renderer API, ownership and projection validation.
-
-## Playback diagnostics
-
-Native playback now pauses its media clock while buffering paired frames, rather than skipping ahead during a decoder stall. If playback still buffers repeatedly, choose **Save playback diagnostics** after reproducing it. The downloaded JSON contains only technical counters, queue sizes, codec dimensions and timings; no filename, footage, audio, path or automatic upload. Share that report manually if troubleshooting is needed. Hardware performance remains device-dependent.
-
-Files up to **64 MiB** prepare once in shared local memory before either decoder receives frames. Larger files use shared, aligned **64 MiB chunks**. Both tracks reuse the same physical reads, and their sample tables guide asynchronous lookahead while the current chunk is playing. Distant track layouts have room for two current chunks and two lookahead chunks.
-
-The large-file reader reserves at most **256 MiB** across cached chunks **and reads still in flight**, with at most two simultaneous local reads. Exact sample copies can add up to 32 MiB per active track; decoder, metadata, browser, and GPU allocations are separate. This is not a total browser-memory cap. No full 1200 MiB recording is loaded at once. Seeking cancels obsolete consumers and queued speculation; uncancelable Blob reads retain their reservations until they finish, and stale results are discarded. A new seek may briefly await such an active read slot. Ready chunks can be reused for nearby seeks.
-
-Startup deliberately waits for the first 64 MiB chunk. On slower storage that can take several seconds; the next chunk is read ahead rather than waiting for a playback miss. Prefetch cannot overcome storage slower than the sustained video bitrate, insufficient HEVC decode throughput, or a GPU bottleneck. Small-file preparation, decode/frame limits, projection, and zoom are unchanged. Everything stays in local memory: no upload or persistent browser copy.
-
-Diagnostics **v7** reports the strategy, shared physical read/prefetch/cache counters, sample-copy bytes, current/peak reserved compressed bytes, concurrent reads, canceled consumers and discarded reads, plus decoder-output latency and animation-frame gaps. Audio scheduling/clock counters and stabilization status/read latency are also included. Native telemetry now uses the same shared input cache instead of issuing a separate physical read at every packet boundary. Shared reads are counted only once. GPU upload timings do not measure asynchronous GPU draw completion.
-
-### Reproducible input benchmark
-
-```sh
-node scripts/benchmark-input.mjs
-```
-
-This is a deterministic **synthetic storage model**, not real HEVC playback or a hardware FPS benchmark: 1200 MiB, interleaved 128 KiB samples, 30 paired frames/second, a shared 16 MiB/s disk and 20 ms overhead/read. Physical reads fall from **600 to 19**, and read volume from **2399.88 to 1200.00 MiB**. In that model, playback-time storage waits fall from 299 to zero after an initial 4.02-second preparation (previous startup: 0.54 seconds). Peak reserved compressed input stays at 256 MiB. Actual results depend on the file layout, storage, browser, CPU/GPU and HEVC hardware; real-device smoothness still needs confirmation.
+- [Player guide](PLAYER_GUIDE.md): detailed controls, playlists, audio preferences and mirroring.
+- [Development](DEVELOPMENT.md): tests, code map, hosting, diagnostics and technical limits.
+- [Audio](AUDIO.md), [stabilization](STABILIZATION.md) and [renderer](MAX_RENDERER.md): implementation details.
+- [Verification](VERIFICATION.md): recorded checks and remaining device-testing gaps.
+- [History](HISTORY.md): development milestones.
+- [Third-party notices](THIRD_PARTY_NOTICES.md): attribution and licenses.
