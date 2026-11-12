@@ -27,7 +27,7 @@ The active desktop or immersive-XR render loop advances native playback; it does
 
 Demux verification compares packet offsets, byte sizes, timestamps and durations against an independent parser such as ffprobe, checks explicit SA3D metadata, and exercises interleaved video/audio reads through the shared cache. Such checks establish container/read behavior, **not real-time decode, acoustic alignment, headphone localization or hardware performance**. Private recordings, derived measurements and extracted metadata are not part of the published evidence.
 
-Synthetic tests cover channel/axis mapping, packet tables, edit trimming, stale output, seek/pause/close, bounded scheduling, muted clocks, audio/video starvation and cache contention. Actual HEVC/AAC WebCodecs playback, browser audio-device latency, perceptual A/V alignment, and head-relative headphone listening still require a supported browser/device. Workspace Chromium failed before loading the application because socket creation was denied. Physical headset behavior remains untested.
+Synthetic tests cover channel/axis mapping, packet tables, edit trimming, stale output, seek/pause/close, bounded scheduling, muted clocks, audio/video starvation and cache contention. Actual HEVC/AAC WebCodecs playback, browser audio-device latency, perceptual A/V alignment, and head-relative headphone listening still require a supported browser/device. Workspace Chromium failed before loading the application because socket creation was denied. Native playback in VR has since been confirmed through Quest Link on Windows; the detailed audio checks above and standalone Quest performance are not established by that confirmation.
 
 ## Primary references
 

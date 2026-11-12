@@ -1,6 +1,6 @@
 # Player guide
 
-Detailed controls and playback behavior. Start with the [README](README.md) for setup and compatibility. Native MAX playback and VR remain experimental; automated checks do not establish physical-device support.
+Detailed controls and playback behavior. Start with the [README](README.md) for setup and compatibility. Native MAX playback has been tested in the browser and in VR through Quest Link on Windows. Performance directly in the standalone Quest browser has not been tested.
 
 ## Flat browser video
 
@@ -28,7 +28,7 @@ The monitor redraws the **left eye** (or the first available mono view), using i
 
 The mirror shares the existing GPU textures and playback clock. It adds **one render pass per available XR frame**; Match headset increases GPU/memory cost, especially with large black bars, but does not increase headset resolution. It adds no decoder, readback, recording, network stream or second audio output. Disable it if headset playback slows. When off, there is no mirror render/resize pass. Tracking loss, hidden/blurred XR visibility, page hiding or opting out clears the previously mirrored frame. A mirror-only drawing error disables the mirror while allowing the headset loop to continue. A graphics-context loss still requires reloading the player.
 
-**Privacy and compatibility:** People looking at the monitor can see the video, the current filename and file date whenever the VR controls are visible, and any open in-app VR playlist, including its filenames and previews. Nothing is uploaded or saved by this feature. It cannot bypass the headset's casting restrictions or send a standalone Quest browser view to a separate computer. It requires the page itself to host the immersive session on that computer and a browser/runtime that composites the page's canvas during XR. Automated tests cover the rendering and lifecycle logic; actual PC-connected-headset output, browser compositing and sustained GPU cost remain unverified on physical hardware.
+**Privacy and compatibility:** People looking at the monitor can see the video, the current filename and file date whenever the VR controls are visible, and any open in-app VR playlist, including its filenames and previews. Nothing is uploaded or saved by this feature. It cannot bypass the headset's casting restrictions or send a standalone Quest browser view to a separate computer. It requires the page itself to host the immersive session on that computer and a browser/runtime that composites the page's canvas during XR. Automated tests cover the rendering and lifecycle logic; the user has confirmed that the desktop mirror works with Quest Link on Windows, but sustained GPU cost has not been benchmarked.
 
 ## Local playlist
 
@@ -86,5 +86,5 @@ Controls are mirrored on **both hands**:
 
 Both hands cannot fight over a drag: the first grip retains ownership until released; a competing already-held grip must be released/repressed. If both sticks are active, right has priority; otherwise left works identically. Simultaneous face-button/stick-click actions are coalesced once per frame (right wins simultaneous panel summons). Dead zones and dominant-axis selection reduce drift/accidental seeking. Buttons held on connection or focus return must be released first. Focus loss, disconnect and VR exit clear input state. Trigger-plus-stick turning is still unassigned.
 
-Mappings use Quest Touch's `xr-standard` layout (stick axes 2/3; grip 1; stick click 3; A/X 4; B/Y 5; upper trigger 0), polled from the XR session rather than desktop gamepads. Hand tracking and nonstandard mappings are ignored. [WebXR mapping specification](https://www.w3.org/TR/webxr-gamepads-module-1/) and [Quest Touch profile](https://github.com/immersive-web/webxr-input-profiles/blob/main/packages/registry/profiles/oculus/oculus-touch-v3.json). Automated mock/controller tests do not replace physical Quest testing; comfort, button media permissions and native decode/seek responsiveness still need device validation.
+Mappings use Quest Touch's `xr-standard` layout (stick axes 2/3; grip 1; stick click 3; A/X 4; B/Y 5; upper trigger 0), polled from the XR session rather than desktop gamepads. Hand tracking and nonstandard mappings are ignored. [WebXR mapping specification](https://www.w3.org/TR/webxr-gamepads-module-1/) and [Quest Touch profile](https://github.com/immersive-web/webxr-input-profiles/blob/main/packages/registry/profiles/oculus/oculus-touch-v3.json). VR has been tested through Quest Link on Windows. Automated mock/controller tests do not establish standalone Quest performance or cover every headset, browser and interruption scenario.
 

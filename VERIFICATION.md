@@ -1,4 +1,12 @@
-# Verification — 2026-10-28
+# Verification
+
+## Current device status — 2026-11-12
+
+The user confirms that native GoPro MAX files work and have been tested in a browser and in VR through Quest Link on Windows. Performance directly in the standalone Quest browser has not been tested. This confirms those playback paths, not every codec, device or edge case.
+
+The dated entries below preserve the checks and limitations recorded at each development stage. Statements that physical-device testing was unavailable describe those earlier checks, not the current overall playback status.
+
+## Initial verification — 2026-10-28
 
 ## Passed
 

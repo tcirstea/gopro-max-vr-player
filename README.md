@@ -1,14 +1,16 @@
 # GoPro MAX VR player
 
+**[Open the player](https://tcirstea.github.io/gopro-max-vr-player/)**
+
 Play original GoPro MAX `.360` videos in your browser without exporting them first. You can also watch ordinary videos on a flat screen, on your desktop or in VR.
 
 Files stay on your device. There are no uploads, accounts or runtime dependencies. This is an independent project, not affiliated with GoPro.
 
-**Native MAX playback and VR are experimental.** Automated tests cover the implementation, but real HEVC playback, GPU performance and headset behavior still need testing on supported devices.
+Native MAX files work and have been tested in the browser and in VR through **Quest Link on Windows**. Performance directly in the standalone Quest browser has not been tested.
 
 ## Get started
 
-You need Node 22+ and Python 3. No `npm install` is needed.
+Use the [hosted player](https://tcirstea.github.io/gopro-max-vr-player/) with no installation, or run it locally with Node 22+ and Python 3. No `npm install` is needed.
 
 ```sh
 npm start
@@ -23,7 +25,7 @@ Open [localhost:8000](http://localhost:8000), then:
 
 ## Supported videos
 
-- **Original GoPro MAX `.360`:** experimental 360° playback, stereo or supported spatial headphone audio, and relative-orientation stabilization. Requires WebCodecs with HEVC support. The native reader accepts two 4096×1344 HEVC video tracks; MAX2 support is not claimed.
+- **Original GoPro MAX `.360`:** 360° playback, stereo or supported spatial headphone audio, and relative-orientation stabilization. Requires WebCodecs with HEVC support. The native reader accepts two 4096×1344 HEVC video tracks; MAX2 support is not claimed.
 - **Ordinary videos:** MP4, WebM, Ogg and other formats your browser can decode. These play as flat video, including on a screen in VR. Codec support depends on your browser, operating system and hardware.
 - **Demo:** a generated panorama that needs no camera footage.
 
