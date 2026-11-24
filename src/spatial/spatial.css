@@ -1,0 +1,24 @@
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#10141b;color:#eff4ff}
+*{box-sizing:border-box}
+main{max-width:980px;margin:auto;padding:28px 18px 38px}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:.9rem}
+header span{color:#ffdd9c;border:1px solid #76613e;border-radius:100px;padding:.25rem .65rem}
+a{color:#a9d3ff}
+h1{font-size:clamp(2rem,6vw,3.25rem);margin:22px 0 8px;letter-spacing:-.035em}
+p{line-height:1.5;color:#c5cfdf;margin:8px 0 18px}
+section{border:1px solid #344157;border-radius:14px;background:#171e29;padding:12px}
+.controls{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-bottom:12px}
+.controls label{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:#d2dced;font-size:.875rem}
+button,select{font:inherit;border:1px solid #5a6b85;border-radius:7px;background:#25334a;color:inherit;padding:7px 10px;min-height:38px}
+button:hover:not(:disabled){background:#365078}
+button:disabled{opacity:.48}
+button:focus-visible,select:focus-visible,canvas:focus-visible,a:focus-visible{outline:2px solid #a9d3ff;outline-offset:2px}
+canvas{display:block;width:100%;aspect-ratio:16/9;max-height:58vh;background:black;border-radius:8px}
+#status{margin:12px 2px;min-height:1.5em}
+dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin:0}
+dl div{background:#202c3c;border-radius:7px;padding:8px 10px}
+dt,.note{font-size:.9rem;color:#c3cee0}
+dd{margin:3px 0 0;font-variant-numeric:tabular-nums;font-weight:600}
+.note{margin:12px 0 0}
+
+[hidden]{display:none!important}

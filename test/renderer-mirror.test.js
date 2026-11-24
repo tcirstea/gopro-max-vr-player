@@ -16,7 +16,7 @@ function harness({maxTexture=8192,maxRenderbuffer=8192,maxViewport=[8192,8192],p
  const gl=new Proxy({
   getShaderParameter:()=>true,getProgramParameter:()=>true,isContextLost:()=>lost,
   getUniformLocation:(_p,n)=>n,
-  uniform1f:(n,v)=>uniforms[n]=v,
+  uniform1f:(n,v)=>uniforms[n]=v,uniform1i:(n,v)=>uniforms[n]=v,
   uniform2fv:(n,v)=>uniforms[n]=Array.from(v),uniform3fv:(n,v)=>uniforms[n]=Array.from(v),
   uniformMatrix3fv:(n,_t,v)=>uniforms[n]=Array.from(v),
   uniformMatrix4fv:(n,_t,v)=>uniforms[n]=Array.from(v),
@@ -244,4 +244,18 @@ test('desktop flat disables pan, roll and keyboard tilt while preserving panoram
  assert.equal(h.uniforms.yaw,yaw);assert.equal(h.uniforms.pitch,pitch);assert.equal(h.uniforms.roll,0);assert.ok(h.uniforms.flatDistance<2);
  h.canvasEvents.pointerdown({button:1,preventDefault(){}});h.windowTick();assert.equal(h.uniforms.flatDistance,2);
  h.renderer.setSource(null);h.canvasEvents.keydown({key:'ArrowUp',preventDefault(){}});h.windowTick();assert.equal(h.uniforms.pitch,pitch+.1);
+});
+
+test('stereo flat screen picks texture by eye, not view order, and ordinary video restores mono', async()=>{
+ const h=harness(), eyeFrame={width:960,height:540};
+ h.renderer.setStereoFlatSources(eyeFrame,eyeFrame);
+ h.renderer.setStereoDesktopEye('right');h.windowTick();
+ assert.equal(h.draws.at(-1).uniforms.panorama,1);
+ h.renderer.setDesktopMirror(true);await h.renderer.enterVR();h.tick();
+ const [right,left,mirror]=h.draws.slice(-3);
+ assert.deepEqual([right,left,mirror].map(d=>d.uniforms.panorama),[1,0,0]);
+ assert.deepEqual(right.uniforms.flatCenter,left.uniforms.flatCenter);
+ assert.equal(h.uploads,2);
+ h.renderer.setSource({width:1920,height:1080},{projection:'flat'});h.tick(20);
+ assert.deepEqual(h.draws.slice(-3).map(d=>d.uniforms.panorama),[0,0,0]);
 });

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spatial Video Lab · GoPro MAX VR Player</title>
+<link rel="stylesheet" href="./spatial.css">
+</head>
+<body>
+<main>
+  <header><a href="../../">← GoPro MAX VR Player</a><span>Experimental</span></header>
+  <h1>Spatial Video Lab</h1>
+  <p>Open an original Apple spatial MOV directly. In VR, each eye gets its own view of the same flat screen. On desktop you can inspect either eye.</p>
+  <section aria-label="Video controls">
+    <div class="controls">
+      <label>Output size
+        <select id="size">
+          <option value="960">960 px per eye</option>
+          <option value="1280">1280 px per eye</option>
+          <option value="1920">Up to 1920 px per eye</option>
+        </select>
+      </label>
+      <button id="multicore" hidden>Enable multicore</button>
+      <label id="threads-row" hidden>Decoder <select id="threads"><option value="4">4 threads</option><option value="1">1 thread</option></select></label>
+      <button id="open">Open local MOV</button>
+      <input id="file" type="file" accept=".mov,.mp4,video/quicktime,video/mp4" hidden>
+      <button id="play" disabled>Play</button>
+      <button id="vr" disabled>Enter VR</button>
+      <button id="reset">Recenter</button>
+      <label>Desktop eye <select id="eye"><option value="left">Left</option><option value="right">Right</option></select></label>
+    </div>
+    <canvas id="view" aria-label="Spatial video preview" tabindex="0"></canvas>
+    <p id="status" role="status">Select a local MOV to begin.</p>
+    <dl aria-label="Playback metrics">
+      <div><dt>Source cadence</dt><dd id="source">–</dd></div>
+      <div><dt>Decode throughput</dt><dd id="decode">–</dd></div>
+      <div><dt>Presented pairs</dt><dd id="shown">–</dd></div>
+      <div><dt>Buffer stalls</dt><dd id="stalls">–</dd></div>
+    </dl>
+  </section>
+  <p class="note">This preview is video-only: no sound, seeking or playlist. Files stay on your device. Changing output size or restarting reopens the original. Decode throughput counts complete left/right pairs during active decoding, not waiting for playback.</p>
+  <p class="note">On Quest Link, use <strong>A/X</strong> to play or pause and click either thumbstick to recenter. <a href="https://github.com/tcirstea/gopro-max-vr-player/tree/main/src/spatial">Decoder source and build instructions</a> · <a href="./COPYING.LGPLv2.1.txt">FFmpeg license</a></p>
+</main>
+<script type="module" src="./spatial.mjs"></script>
+</body>
+</html>
