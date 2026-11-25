@@ -6,11 +6,15 @@ const isolated = globalThis.crossOriginIsolated === true;
 const threads = $('threads'), multicore = $('multicore');
 const views = [document.createElement('canvas'),document.createElement('canvas')];
 const contexts = views.map(view => view.getContext('2d', {alpha:false}));
-const BUFFER = 24, START = 10, MAX_QUEUE_BYTES = 96 * 1024 ** 2;
+const AHEAD_SECONDS = 3, START_SECONDS = 2, REFILL_SECONDS = 1;
+const MAX_QUEUE_BYTES = 256 * 1024 ** 2, MAX_PAIRS = 180, BATCH_PAIRS = 6;
 let renderer, worker, selected, queue, pending, done, playing, ready, ended, waiting;
-let capacity, firstTime, lastTime, nextDue, sourceFPS, decoded, shown, stalls, decodeMS;
+let capacity, pairBytes, queuedBytes, firstTime, lastTime, nextDue, sourceFPS, decoded, shown, stalls, decodeMS;
 
-function note(message) { $('status').textContent = message; }
+function note(message) {
+  const status = $('status');
+  if (status.textContent !== message) status.textContent = message;
+}
 function metrics() {
   $('source').textContent = sourceFPS ? `${sourceFPS.toFixed(2)} fps` : '–';
   $('decode').textContent = decodeMS ? `${(1000*decoded/decodeMS).toFixed(1)} pairs/s` : '–';
@@ -22,14 +26,17 @@ function metrics() {
 function stopWorker() { worker?.terminate(); worker = null; }
 function fail(message) {
   stopWorker();
-  queue = []; pending = ready = playing = false;
+  queue = []; queuedBytes = 0; pending = ready = playing = false;
   note(message);
   metrics();
 }
 function fill() {
-  if (!worker || done || pending || queue.length >= capacity) return;
+  if (!worker || done || pending) return;
+  const byteRoom = pairBytes ? Math.floor((MAX_QUEUE_BYTES - queuedBytes) / pairBytes) : 1;
+  const count = Math.min(BATCH_PAIRS, capacity - queue.length, byteRoom);
+  if (count <= 0) return;
   pending = true;
-  worker.postMessage({type:'read', count:capacity-queue.length});
+  worker.postMessage({type:'read', count});
 }
 function display(pair) {
   for (let i=0; i<2; i++) {
@@ -47,6 +54,7 @@ function load(file, autoplay = false) {
   stopWorker();
   queue = [];
   capacity = 1;
+  pairBytes = queuedBytes = 0;
   pending = done = ready = ended = waiting = false;
   playing = autoplay;
   sourceFPS = decoded = shown = stalls = decodeMS = 0;
@@ -72,11 +80,17 @@ function load(file, autoplay = false) {
         if (!Number.isFinite(pair.time) || (lastTime !== null && pair.time <= lastTime)) {
           fail('The decoder emitted out-of-order stereo timestamps.'); return;
         }
+        const bytes = pair.eyes.reduce((total, eye) => total + eye.byteLength, 0);
         if (firstTime === null) {
           firstTime = pair.time;
-          capacity = Math.max(1, Math.min(BUFFER, Math.floor(MAX_QUEUE_BYTES / (pair.width*pair.height*8))));
+          pairBytes = bytes;
+          capacity = Math.min(MAX_PAIRS, Math.ceil(AHEAD_SECONDS * (sourceFPS || 30)), Math.floor(MAX_QUEUE_BYTES / bytes));
+        }
+        if (!bytes || bytes !== pairBytes || queuedBytes + bytes > MAX_QUEUE_BYTES) {
+          fail('The decoded stereo frames do not fit the buffer. Try a smaller output size.'); return;
         }
         lastTime = pair.time;
+        queuedBytes += bytes;
         queue.push(pair);
       }
       if (!ready && queue.length) {
@@ -98,14 +112,26 @@ function toggle() {
   playing = !playing;
   nextDue = null;
   waiting = false;
-  note(playing ? 'Playing original MOV…' : 'Paused.');
+  note(playing ? 'Buffering both eyes…' : 'Paused.');
   metrics();
 }
 function tick() {
   if (!playing || !ready) return;
   const now = performance.now();
   if (nextDue === null) {
-    if (!done && queue.length < Math.min(START, capacity)) return;
+    const fps = sourceFPS || 30;
+    let goal = shown && !waiting ? 1 : Math.ceil((waiting ? REFILL_SECONDS : START_SECONDS) * fps);
+    // Don't leave a very slow decoder at the startup screen for minutes.
+    // A near-real-time decoder still gets the full preroll.
+    const throughput = decodeMS ? 1000 * decoded / decodeMS : fps;
+    if (decoded >= BATCH_PAIRS && throughput < fps * 0.7) {
+      goal = Math.min(goal, Math.max(2, Math.ceil(throughput * 3)));
+    }
+    goal = Math.min(goal, capacity);
+    if (!done && queue.length < goal) {
+      note(`Buffering both eyes… ${queue.length}/${goal} pairs ready`);
+      return;
+    }
     nextDue = now;
     waiting = false;
     note('Playing original MOV…');
@@ -127,6 +153,7 @@ function tick() {
     return;
   }
   const current = queue.shift();
+  queuedBytes -= pairBytes;
   const step = queue.length ? 1000*(queue[0].time-current.time) : 1000/(sourceFPS || 30);
   // Keep the clock stable without bursting through stale frames in the headset.
   nextDue = Math.max(nextDue+step, now);
