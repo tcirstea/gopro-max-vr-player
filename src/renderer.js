@@ -1,3 +1,4 @@
+import {yuvColor,yuvLayout} from './spatial/yuv-color.mjs';
 import {createFlatView,flatSize,FLAT_GLSL} from './flat-view.js';
 import {createXRPanel} from './xr-panel.js';
 import {createZoomDetents} from './zoom.js';
@@ -32,7 +33,8 @@ export function createRenderer(canvas) {
   let xrTransition=null;
   let xrCenter=quaternionMatrix(IDENTITY_QUATERNION),pendingRecenter=false;
   let xrPanel=null,panelStateCallback=null;
-  let stereoFlat=false,desktopEye=0;
+  let stereoFlat=false,desktopEye=0,planarEyes=null;
+  const planarTextures=[];let planarWidth=0,planarHeight=0;
   let desktopMirror=false,mirrorPainted=false,mirrorQuality='performance',mirrorLimits=null;
   const panelError=error=>canvas.dispatchEvent(new CustomEvent('xrerror',{detail:`VR controls: ${error.message}`}));
   function togglePanel(input,reveal=false){
@@ -53,7 +55,16 @@ export function createRenderer(canvas) {
   function reportView(pose=null){if(mode===2){lastView=quaternionMatrix(IDENTITY_QUATERNION);orientationCallback?.(lastView.slice());return;}const view=pose?multiplyMatrix3(viewRotationMatrix(yaw,0),multiplyMatrix3(xrCenter,viewRotationMatrix(0,0,pose))):multiplyMatrix3(viewRotationMatrix(yaw,pitch),quaternionMatrix([Math.cos(roll/2),0,0,Math.sin(roll/2)]));lastView=multiplyMatrix3(stabilization,view);orientationCallback?.(lastView.slice());}
   function upload(s,i){gl.activeTexture(gl.TEXTURE0+i);gl.bindTexture(gl.TEXTURE_2D,textures[i]);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,s);}
   function uploadSource(){if(source&&(dirty||(source.tagName==='VIDEO'&&!source.paused))&&(source.tagName!=='VIDEO'||source.readyState>=2)){try{upload(source,0);}catch(error){source=null;canvas.dispatchEvent(new CustomEvent('rendererror',{detail:error.message}));}}dirty=false;}
-  function render(w,h,xr=false,eye=null){gl.uniform1i(loc('panorama'),stereoFlat&&(eye==='right'||(!xr&&desktopEye===1))?1:0);for(const [n,v]of Object.entries({aspect:w/Math.max(1,h),yaw,pitch,roll,fov,mode,xr:xr?1:0}))gl.uniform1f(loc(n),v);gl.uniformMatrix3fv(loc('stabilization'),false,stabilization);gl.uniformMatrix3fv(loc('xrCenter'),false,xrCenter);
+  function render(w,h,xr=false,eye=null){
+    const index=stereoFlat&&(eye==='right'||(!xr&&desktopEye===1))?1:0;
+    gl.uniform1i(loc('panorama'),index);
+    gl.uniform1f(loc('planarVideo'),planarEyes?1:0);
+    if(planarEyes){
+      const {levels,coeff}=planarEyes[index], start=2+index*3;
+      gl.uniform1i(loc('spatialY'),start);gl.uniform1i(loc('spatialU'),start+1);gl.uniform1i(loc('spatialV'),start+2);
+      gl.uniform3fv(loc('yuvLevels'),levels);gl.uniform4fv(loc('yuvCoeff'),coeff);
+    }
+    for(const [n,v]of Object.entries({aspect:w/Math.max(1,h),yaw,pitch,roll,fov,mode,xr:xr?1:0}))gl.uniform1f(loc(n),v);gl.uniformMatrix3fv(loc('stabilization'),false,stabilization);gl.uniformMatrix3fv(loc('xrCenter'),false,xrCenter);
     if(mode===2){
       const width=source?.videoWidth||source?.width,height=source?.videoHeight||source?.height;
       if(width>0&&height>0)sourceAspect=width/height;
@@ -114,7 +125,7 @@ export function createRenderer(canvas) {
   }
   function draw(time){
     requestAnimationFrame(draw);if(gl.isContextLost()||session)return;
-    frameCallback?.(time);uploadSource();reportView();const {w,h}=resizeDesktop();
+    frameCallback?.(time,false);uploadSource();reportView();const {w,h}=resizeDesktop();
     gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,w,h);render(w,h);
   }
   function xrDraw(time,frame){
@@ -127,7 +138,7 @@ export function createRenderer(canvas) {
     const dragSpace=dragSource?.gripSpace||dragSource?.targetRaySpace;
     const controllerPose=dragSpace?frame.getPose?.(dragSpace,referenceSpace):null;
     if(mode!==2)xrCenter=viewDrag.update(xrCenter,pose.transform.matrix,controllerPose?.transform.matrix);
-    frameCallback?.(time);
+    frameCallback?.(time,true);
     try{xrPanel?.update(session,time,frame,referenceSpace,pose.transform.matrix);}catch(error){xrPanel?.reset();panelError(error);}
     uploadSource();reportView(pose.transform.matrix);
     const layer=session.renderState.baseLayer;
@@ -188,16 +199,46 @@ export function createRenderer(canvas) {
     endPointer();dragSource=null;viewDrag.reset();zoomDetents.reset();lastWheelTime=null;
     if(next===2)flatView.recenter();mode=next;
   }
-  const api={setSource(next,{projection='equirectangular'}={}){stereoFlat=false;source=next;setMode(projection==='flat'?2:0);dirty=true;stabilization=quaternionMatrix(IDENTITY_QUATERNION);},
+  const api={setSource(next,{projection='equirectangular'}={}){stereoFlat=false;planarEyes=null;source=next;setMode(projection==='flat'?2:0);dirty=true;stabilization=quaternionMatrix(IDENTITY_QUATERNION);},
     // Both textures map to the same physical screen, one texture per XR eye.
     setStereoFlatSources(left,right){
       if(!left.width||!left.height||left.width!==right.width||left.height!==right.height)throw new Error('Stereo eyes must have matching dimensions.');
-      upload(left,0);upload(right,1);
+      upload(left,0);upload(right,1);planarEyes=null;
       stereoFlat=true;source=null;sourceAspect=left.width/left.height;setMode(2);dirty=false;
+    },
+    // Match the flat screen's geometry, but keep the input in three compact planes per eye.
+    setStereoFlatYUV(width,height,eyes,colors){
+      const {planes,bytes}=yuvLayout(width,height);
+      if(!(width>0 && height>0 && eyes.length===2 && eyes.every(eye=>eye.byteLength===bytes)))
+        throw new Error('Invalid spatial YUV frame.');
+      const resize=planarWidth!==width||planarHeight!==height;
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT,1);
+      try{
+        for(let eye=0;eye<2;eye++){
+          for(let plane=0;plane<3;plane++){
+            const i=eye*3+plane,[offset,length,w,h]=planes[plane];
+            gl.activeTexture(gl.TEXTURE0+2+i);
+            const fresh=!planarTextures[i];
+            gl.bindTexture(gl.TEXTURE_2D,planarTextures[i]??(planarTextures[i]=gl.createTexture()));
+            if(fresh){
+              for(const name of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,name,gl.LINEAR);
+              for(const name of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,name,gl.CLAMP_TO_EDGE);
+            }
+            const pixels=new Uint8Array(eyes[eye],offset,length);
+            if(resize||fresh)gl.texImage2D(gl.TEXTURE_2D,0,gl.LUMINANCE,w,h,0,gl.LUMINANCE,gl.UNSIGNED_BYTE,pixels);
+            else gl.texSubImage2D(gl.TEXTURE_2D,0,0,0,w,h,gl.LUMINANCE,gl.UNSIGNED_BYTE,pixels);
+          }
+        }
+      }finally{gl.pixelStorei(gl.UNPACK_ALIGNMENT,4);gl.activeTexture(gl.TEXTURE0);}
+      planarWidth=width;planarHeight=height;
+      if(!planarEyes || planarEyes[0].flags!==colors[0] || planarEyes[1].flags!==colors[1])
+        planarEyes=colors.map(flags=>({flags,...yuvColor(flags)}));
+      stereoFlat=true;source=null;sourceAspect=width/height;setMode(2);dirty=false;
     },
     setStereoDesktopEye(eye){desktopEye=eye==='right'?1:0;},
     // Synchronous GPU upload. Caller retains ownership and may close frames immediately.
-    setMaxSources(first,second,options={}){const width=options.width??first.displayWidth??first.videoWidth??first.width;const height=options.height??first.displayHeight??first.videoHeight??first.height;const l=maxLayout(width,height);const secondWidth=second.displayWidth??second.videoWidth??second.width;const secondHeight=second.displayHeight??second.videoHeight??second.height;if(!options.width&&(secondWidth!==width||secondHeight!==height))throw new Error('MAX track frames must have matching dimensions.');if(width>gl.getParameter(gl.MAX_TEXTURE_SIZE))throw new Error('This GPU cannot hold the MAX video textures.');if(gl.isContextLost())throw new Error('Graphics context is lost.');upload(first,0);upload(second,1);gl.uniform4f(loc('maxSize'),l.width,l.height,l.side,l.center);gl.uniform1f(loc('maxBlend'),l.blend);stabilization=quaternionMatrix(options.stabilization||IDENTITY_QUATERNION);source=null;stereoFlat=false;setMode(1);dirty=false;},
+    setMaxSources(first,second,options={}){const width=options.width??first.displayWidth??first.videoWidth??first.width;const height=options.height??first.displayHeight??first.videoHeight??first.height;const l=maxLayout(width,height);const secondWidth=second.displayWidth??second.videoWidth??second.width;const secondHeight=second.displayHeight??second.videoHeight??second.height;if(!options.width&&(secondWidth!==width||secondHeight!==height))throw new Error('MAX track frames must have matching dimensions.');if(width>gl.getParameter(gl.MAX_TEXTURE_SIZE))throw new Error('This GPU cannot hold the MAX video textures.');if(gl.isContextLost())throw new Error('Graphics context is lost.');upload(first,0);upload(second,1);gl.uniform4f(loc('maxSize'),l.width,l.height,l.side,l.center);gl.uniform1f(loc('maxBlend'),l.blend);stabilization=quaternionMatrix(options.stabilization||IDENTITY_QUATERNION);source=null;stereoFlat=false;planarEyes=null;setMode(1);dirty=false;},
     // A single active render loop drives native media even when immersive XR
     // suppresses window animation frames; advance before texture/view upload.
     hideXRControls(){xrPanel?.reset();},

@@ -29,6 +29,11 @@
       <button id="reset">Recenter</button>
       <label>Desktop eye <select id="eye"><option value="left">Left</option><option value="right">Right</option></select></label>
     </div>
+    <div class="controls">
+      <label><input id="shader" type="checkbox"> GPU color conversion (experimental)</label>
+      <label><input id="mirror" type="checkbox" checked> Mirror headset on this screen</label>
+      <button id="diagnostics" disabled>Save playback diagnostics</button>
+    </div>
     <canvas id="view" aria-label="Spatial video preview" tabindex="0"></canvas>
     <p id="status" role="status">Select a local MOV to begin.</p>
     <dl aria-label="Playback metrics">
@@ -38,9 +43,9 @@
       <div><dt>Buffer stalls</dt><dd id="stalls">–</dd></div>
     </dl>
   </section>
-  <p class="note">This preview is video-only: no sound, seeking or playlist. Files stay on your device. Changing output size or restarting reopens the original. Decode throughput counts complete left/right pairs during active decoding, not waiting for playback.</p>
+  <p class="note">This preview is video-only: no sound, seeking or playlist. Files stay on your device. Changing output size or restarting reopens the original. Decode throughput counts complete left/right pairs during active decoding, not waiting for playback. Changing GPU color conversion or mirror settings after opening a file restarts the clip for a clean comparison. Diagnostics save local timing counters only, with no names, paths or media.</p>
   <p class="note">On Quest Link, use <strong>A/X</strong> to play or pause and click either thumbstick to recenter. <a href="https://github.com/tcirstea/gopro-max-vr-player/tree/main/src/spatial">Decoder source and build instructions</a> · <a href="./COPYING.LGPLv2.1.txt">FFmpeg license</a></p>
 </main>
-<script type="module" src="./spatial.mjs"></script>
+<script type="module" src="./spatial.mjs?v=planar1"></script>
 </body>
 </html>

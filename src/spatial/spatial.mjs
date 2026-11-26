@@ -1,14 +1,17 @@
-import {createRenderer} from '../renderer.js';
+import {createRenderer} from '../renderer.js?v=planar1';
+import {createPlaybackDiagnostics,downloadPlaybackDiagnostics} from './playback-diagnostics.mjs';
 
 const $ = id => document.getElementById(id);
 const canvas = $('view'), vr = $('vr'), play = $('play'), size = $('size');
 const isolated = globalThis.crossOriginIsolated === true;
 const threads = $('threads'), multicore = $('multicore');
+const shader = $('shader'), mirror = $('mirror'), download = $('diagnostics');
 const views = [document.createElement('canvas'),document.createElement('canvas')];
 const contexts = views.map(view => view.getContext('2d', {alpha:false}));
 const AHEAD_SECONDS = 3, START_SECONDS = 2, REFILL_SECONDS = 1;
 const MAX_QUEUE_BYTES = 256 * 1024 ** 2, MAX_PAIRS = 180, BATCH_PAIRS = 6;
 let renderer, worker, selected, queue, pending, done, playing, ready, ended, waiting;
+let diag, requestTime, requested, actualShader;
 let capacity, pairBytes, queuedBytes, firstTime, lastTime, nextDue, sourceFPS, decoded, shown, stalls, decodeMS;
 
 function note(message) {
@@ -22,10 +25,12 @@ function metrics() {
   $('stalls').textContent = ready ? String(stalls) : '–';
   play.disabled = !ready;
   play.textContent = ended ? 'Replay' : playing ? 'Pause' : 'Play';
+  download.disabled = !diag;
 }
 function stopWorker() { worker?.terminate(); worker = null; }
 function fail(message) {
   stopWorker();
+  diag?.stall(false);
   queue = []; queuedBytes = 0; pending = ready = playing = false;
   note(message);
   metrics();
@@ -36,9 +41,11 @@ function fill() {
   const count = Math.min(BATCH_PAIRS, capacity - queue.length, byteRoom);
   if (count <= 0) return;
   pending = true;
+  requested = count; requestTime = performance.now();
   worker.postMessage({type:'read', count});
 }
 function display(pair) {
+  if (pair.colors) { renderer.setStereoFlatYUV(pair.width,pair.height,pair.eyes,pair.colors); return; }
   for (let i=0; i<2; i++) {
     const view = views[i];
     if (view.width !== pair.width || view.height !== pair.height) {
@@ -52,6 +59,9 @@ function load(file, autoplay = false) {
   if (!renderer) return;
   selected = file;
   stopWorker();
+  const settings = {width:Number(size.value),threads:isolated ? Number(threads.value) : 1,shader:shader.checked,mirror:mirror.checked};
+  diag = createPlaybackDiagnostics(settings);
+  actualShader = null;
   queue = [];
   capacity = 1;
   pairBytes = queuedBytes = 0;
@@ -63,15 +73,17 @@ function load(file, autoplay = false) {
   renderer.setStereoFlatSources(...views);
   note('Opening the MOV and decoding both eyes…');
   metrics();
-  const current = worker = new Worker(new URL('./decoder-worker.mjs', import.meta.url), {type:'module'});
+  const current = worker = new Worker(new URL('./decoder-worker.mjs?v=planar1', import.meta.url), {type:'module'});
   current.onerror = () => { if (worker === current) fail('Could not start the spatial decoder. Try an up-to-date Chrome or Edge and reload.'); };
   current.onmessage = ({data}) => {
     if (worker !== current) return;
     if (data.type === 'opened') {
       sourceFPS = data.fps;
+      diag.source(sourceFPS);
       fill();
     } else if (data.type === 'frames') {
       pending = false;
+      const roundTripMs = performance.now()-requestTime;
       done = data.ended;
       if (done) stopWorker();
       decodeMS += data.milliseconds;
@@ -84,6 +96,8 @@ function load(file, autoplay = false) {
         if (firstTime === null) {
           firstTime = pair.time;
           pairBytes = bytes;
+          actualShader = Boolean(pair.colors);
+          diag.actualShader(actualShader);
           capacity = Math.min(MAX_PAIRS, Math.ceil(AHEAD_SECONDS * (sourceFPS || 30)), Math.floor(MAX_QUEUE_BYTES / bytes));
         }
         if (!bytes || bytes !== pairBytes || queuedBytes + bytes > MAX_QUEUE_BYTES) {
@@ -93,10 +107,11 @@ function load(file, autoplay = false) {
         queuedBytes += bytes;
         queue.push(pair);
       }
+      diag.batch({requested,pairs:data.list.length,workerMs:data.milliseconds,roundTripMs,stages:data.stages,queue:queue.length});
       if (!ready && queue.length) {
         ready = true;
         try { display(queue[0]); } catch (error) { fail(error.message); return; }
-        note(playing ? 'Buffering both eyes…' : 'Both eyes decoded. Press Play or enter VR.');
+        note(playing ? 'Buffering both eyes…' : settings.shader && !actualShader ? 'CPU fallback for this pixel format. Press Play or enter VR.' : 'Both eyes decoded. Press Play or enter VR.');
       } else if (!ready && done) {
         fail('No stereo frames were found in this file.'); return;
       }
@@ -104,20 +119,23 @@ function load(file, autoplay = false) {
     } else if (data.type === 'error') fail(data.message);
     metrics();
   };
-  current.postMessage({type:'open', file, width:Number(size.value), threads:isolated ? Number(threads.value) : 1});
+  current.postMessage({type:'open', file, ...settings});
 }
 function toggle() {
   if (!ready) return;
   if (ended) { load(selected, true); return; }
   playing = !playing;
+  diag.stall(false);
+  diag.resetCadence();
   nextDue = null;
   waiting = false;
   note(playing ? 'Buffering both eyes…' : 'Paused.');
   metrics();
 }
-function tick() {
+function tick(_time,xr) {
   if (!playing || !ready) return;
   const now = performance.now();
+  diag.frame({queue:queue.length,xr});
   if (nextDue === null) {
     const fps = sourceFPS || 30;
     let goal = shown && !waiting ? 1 : Math.ceil((waiting ? REFILL_SECONDS : START_SECONDS) * fps);
@@ -134,17 +152,20 @@ function tick() {
     }
     nextDue = now;
     waiting = false;
-    note('Playing original MOV…');
+    diag.stall(false);
+    note(actualShader ? 'Playing original MOV · GPU color conversion' : 'Playing original MOV · CPU color conversion');
   }
   if (now < nextDue) return;
   if (!queue.length) {
     if (done) {
       ended = true;
       playing = false;
+      diag.stall(false);
       note('Finished. Compare decode throughput with source cadence, and check buffer stalls.');
       metrics();
     } else if (!waiting) {
       stalls++;
+      diag.stall(true);
       nextDue = null;
       waiting = true;
       note('Buffering both eyes…');
@@ -157,8 +178,10 @@ function tick() {
   const step = queue.length ? 1000*(queue[0].time-current.time) : 1000/(sourceFPS || 30);
   // Keep the clock stable without bursting through stale frames in the headset.
   nextDue = Math.max(nextDue+step, now);
+  const startDisplay = performance.now();
   try { display(current); } catch (error) { fail(error.message); return; }
   shown++;
+  diag.present({costMs:performance.now()-startDisplay,queue:queue.length});
   fill();
   if (shown%8 === 0) metrics();
 }
@@ -167,7 +190,7 @@ try {
   for (const view of views) { view.width = 16; view.height = 9; }
   renderer.setStereoFlatSources(...views);
   renderer.onBeforeRender(tick);
-  renderer.setDesktopMirror(true);
+  renderer.setDesktopMirror(mirror.checked);
   renderer.onXRPanelState(() => ({playing, canPlay:ready, duration:lastTime == null ? 0 : lastTime-firstTime}));
   $('open').onclick = () => $('file').click();
   $('file').onchange = () => {
@@ -175,7 +198,13 @@ try {
     $('file').value = '';
     if (file) load(file);
   };
-  size.onchange = threads.onchange = () => { if (selected) load(selected); };
+  size.onchange = threads.onchange = shader.onchange = () => { if (selected) load(selected); };
+  mirror.onchange = () => {
+    renderer.setDesktopMirror(mirror.checked);
+    if (selected) load(selected);
+  };
+  download.onclick = () => { if (diag) downloadPlaybackDiagnostics(diag); };
+  document.addEventListener('visibilitychange', () => diag?.resetCadence());
   $('threads-row').hidden = !isolated;
   multicore.hidden = isolated || !navigator.serviceWorker;
   multicore.onclick = async () => {

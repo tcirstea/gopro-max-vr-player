@@ -31,7 +31,7 @@ emcc -O3 -msimd128 "${link_flags[@]}" -I. "$out/decoder.c" libavformat/libavform
   libswscale/libswscale.a libavutil/libavutil.a -lworkerfs.js \
   -sENVIRONMENT=worker -sMODULARIZE=1 -sEXPORT_ES6=1 -sFORCE_FILESYSTEM=1 \
   -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=536870912 \
-  -sEXPORTED_FUNCTIONS=_sp_open,_sp_next,_sp_width,_sp_height,_sp_time,_sp_fps,_sp_eye,_sp_close,_sp_error \
+  -sEXPORTED_FUNCTIONS=_sp_open,_sp_next,_sp_width,_sp_height,_sp_time,_sp_fps,_sp_eye,_sp_planar,_sp_color,_sp_demux_ms,_sp_convert_ms,_sp_close,_sp_error \
   -sEXPORTED_RUNTIME_METHODS=FS,WORKERFS,UTF8ToString,HEAPU8 \
   -o "$out/$core.mjs"
 gzip -9n -c "$out/$core.wasm" > "$out/$core.wasm.gz"

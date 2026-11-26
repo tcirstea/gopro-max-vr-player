@@ -20,6 +20,19 @@ yield stalls if rendering and transfers are slow. Try a higher output size only
 if there is headroom. Lower sizes cut upload/scaling cost; the original coded
 frame size must still be decoded. Nothing is sent automatically.
 
+To compare CPU and experimental GPU color conversion, use the same local clip,
+output size and thread count for both runs. The GPU path sends compact 8-bit
+4:2:0 planes to WebGL, which converts color while drawing, without the two 2D
+staging canvases. Lower output resolutions still use CPU scaling before upload;
+the GPU does not decode MV-HEVC. Non-8-bit-4:2:0 input uses the CPU RGBA path.
+The desktop headset mirror can be turned off to isolate its rendering cost.
+
+**Save playback diagnostics** downloads local JSON with aggregate and recent
+batch timings, queue depth, underrun durations, and rendering cadence before
+and after processing. The shader setting and actual output path are both in the
+log. Display submit time measures CPU-side submission, not asynchronous GPU
+work. The JSON has no file or device identifiers, paths, pictures, or audio.
+
 ## Corresponding sources and rebuilding
 
 FFmpeg 7.1.5 is used under LGPL-2.1-or-later. No encoder, network protocol, GPL

@@ -1,3 +1,4 @@
+import {YUV_GLSL} from './spatial/yuv-color.mjs';
 // A single world-space screen shared by both eyes. Never center per eye or
 // rewrite the XR camera matrices: physical head translation/rotation stays live.
 export const DEFAULT_FLAT_DISTANCE=2;
@@ -27,6 +28,7 @@ export function createFlatView(){
  };
 }
 export const FLAT_GLSL=`
+ ${YUV_GLSL}
  uniform float videoAspect,flatDistance;
  uniform vec3 flatCenter;
  uniform mat3 flatRotation;
@@ -45,6 +47,7 @@ export const FLAT_GLSL=`
    point=uv/(fit*(2./flatDistance))*.5+.5;
   }
   if(any(lessThan(point,vec2(0.)))||any(greaterThan(point,vec2(1.))))return vec4(0.,0.,0.,1.);
+  if(planarVideo>.5)return samplePlaneVideo(point);
   return texture2D(panorama,point);
  }
 `;

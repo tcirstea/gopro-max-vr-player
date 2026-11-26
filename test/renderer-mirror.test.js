@@ -1,3 +1,4 @@
+import {YUV_GLSL,yuvColor,yuvLayout} from '../src/spatial/yuv-color.mjs';
 import {createFlatView,flatSize,FLAT_GLSL} from '../src/flat-view.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -37,7 +38,7 @@ function harness({maxTexture=8192,maxRenderbuffer=8192,maxViewport=[8192,8192],p
  const views=[{eye:'right',projectionMatrix:identity,transform:{matrix:rightMatrix,inverse:{matrix:identity}}},{eye:'left',projectionMatrix:leftProjection,transform:{matrix:leftMatrix,inverse:{matrix:identity}}}];
  let pose={transform:{matrix:identity},views},controller=identity;
  const frame={session,getViewerPose:()=>pose,getPose:()=>({transform:{matrix:controller}})};
- const context=vm.createContext({createFlatView,flatSize,FLAT_GLSL,createZoomDetents,createXRViewDrag,createXRControls,maxLayout,MAX_GLSL,...quaternions,Event,CustomEvent,Promise,performance,document,navigator:{xr:hasXR?{requestSession:async()=>session}:undefined},requestAnimationFrame:f=>windowFrame=f,devicePixelRatio:pixelRatio,XRWebGLLayer:class{framebuffer='XR';getViewport(view){return viewports[view.eye]||viewports.left;}},createXRPanel:()=>({show(){},toggle(){},reset(){},update(){panelUpdates++;},draw(view){panelDraws.push({view,framebuffer,viewport:[...viewport]});}})});
+ const context=vm.createContext({YUV_GLSL,yuvColor,yuvLayout,createFlatView,flatSize,FLAT_GLSL,createZoomDetents,createXRViewDrag,createXRControls,maxLayout,MAX_GLSL,...quaternions,Event,CustomEvent,Promise,performance,document,navigator:{xr:hasXR?{requestSession:async()=>session}:undefined},requestAnimationFrame:f=>windowFrame=f,devicePixelRatio:pixelRatio,XRWebGLLayer:class{framebuffer='XR';getViewport(view){return viewports[view.eye]||viewports.left;}},createXRPanel:()=>({show(){},toggle(){},reset(){},update(){panelUpdates++;},draw(view){panelDraws.push({view,framebuffer,viewport:[...viewport]});}})});
  vm.runInContext(readFileSync(new URL('../src/renderer.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace(/^export /gm,''),context);
  const renderer=context.createRenderer(canvas);renderer.onBeforeRender(()=>advances++);
  const initialUploads=uploads;
@@ -258,4 +259,35 @@ test('stereo flat screen picks texture by eye, not view order, and ordinary vide
  assert.equal(h.uploads,2);
  h.renderer.setSource({width:1920,height:1080},{projection:'flat'});h.tick(20);
  assert.deepEqual(h.draws.slice(-3).map(d=>d.uniforms.panorama),[0,0,0]);
+});
+
+test('GPU spatial uploads reuse planar textures and map them by named eye, including mirror',async()=>{
+ const h=harness(), {bytes}=yuvLayout(5,3);
+ const eyes=[new ArrayBuffer(bytes),new ArrayBuffer(bytes)];
+ const initial=h.uploads;
+ h.renderer.setStereoFlatYUV(5,3,eyes,[0,5]);
+ assert.equal(h.uploads,initial+6);
+ h.renderer.setStereoFlatYUV(5,3,eyes,[0,5]);
+ assert.equal(h.uploads,initial+6);
+ h.renderer.setStereoDesktopEye('right');h.windowTick();
+ assert.equal(h.uniforms.spatialY,5);
+ assert.equal(h.uniforms.planarVideo,1);
+ assert.equal(h.uniforms.yuvLevels[0],0);
+ h.renderer.setDesktopMirror(true);
+ await h.renderer.enterVR();h.tick();
+ const views=h.draws.slice(-3).map(d=>d.uniforms);
+ assert.deepEqual(views.map(u=>u.spatialY),[5,2,2]);
+ assert.deepEqual(views.map(u=>u.spatialU),[6,3,3]);
+ assert.deepEqual(views.map(u=>u.spatialV),[7,4,4]);
+ h.renderer.setStereoFlatSources({width:5,height:3},{width:5,height:3});h.tick(20);
+ assert.equal(h.draws.at(-1).uniforms.planarVideo,0);
+});
+
+test('8-bit spatial color maps limited black/white and neutral chroma; handles odd plane sizes',()=>{
+ const {levels,coeff}=yuvColor(0);
+ assert.equal((16/255-levels[0])*levels[1],0);
+ assert.ok(Math.abs((235/255-levels[0])*levels[1]-1)<1e-12);
+ assert.equal(levels[2],128/255);
+ assert.ok(coeff[0]>coeff[3]*.8);
+ assert.deepEqual(yuvLayout(5,3),{planes:[[0,15,5,3],[79,6,3,2],[149,6,3,2]],bytes:155});
 });
